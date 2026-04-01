@@ -152,6 +152,7 @@ def create_unified_app(
         'heleket': settings.is_heleket_enabled(),
         'freekassa': settings.is_freekassa_enabled(),
         'riopay': settings.is_riopay_enabled(),
+        'lava': settings.is_lava_enabled(),
     }
 
     if enable_telegram_webhook:

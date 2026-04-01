@@ -1480,6 +1480,7 @@ async def _find_succeeded_provider_payment(
         FreekassaPayment,
         HeleketPayment,
         KassaAiPayment,
+        LavaPayment,
         MulenPayPayment,
         Pal24Payment,
         PlategaPayment,
@@ -1550,6 +1551,10 @@ async def _find_succeeded_provider_payment(
         model = SeverPayPayment
         payment_id_attr = 'order_id'
         extra_conditions = [SeverPayPayment.status == 'success', SeverPayPayment.is_paid.is_(True)]
+    elif base_method == 'lava':
+        model = LavaPayment
+        payment_id_attr = 'contract_id'
+        extra_conditions = [LavaPayment.status == 'success', LavaPayment.is_paid.is_(True)]
 
     if model is None:
         return None

@@ -63,7 +63,7 @@ CATEGORY_GROUP_METADATA: dict[str, dict[str, object]] = {
     },
     'payments': {
         'title': '💳 Платежные системы',
-        'description': 'YooKassa, CryptoBot, Heleket, CloudPayments, Freekassa, MulenPay, PAL24, Wata, Platega, Tribute, Kassa AI, RioPay, SeverPay и Telegram Stars.',
+        'description': 'YooKassa, CryptoBot, Heleket, CloudPayments, Freekassa, MulenPay, PAL24, Wata, Platega, Tribute, Kassa AI, RioPay, SeverPay, Lava.top и Telegram Stars.',
         'icon': '💳',
         'categories': (
             'PAYMENT',
@@ -76,6 +76,7 @@ CATEGORY_GROUP_METADATA: dict[str, dict[str, object]] = {
             'KASSA_AI',
             'RIOPAY',
             'SEVERPAY',
+            'LAVA',
             'MULENPAY',
             'PAL24',
             'WATA',
@@ -266,6 +267,7 @@ def _get_group_status(group_key: str) -> tuple[str, str]:
             'Freekassa': settings.is_freekassa_enabled(),
             'Kassa AI': settings.is_kassa_ai_enabled(),
             'RioPay': settings.is_riopay_enabled(),
+            'Lava': settings.is_lava_enabled(),
             'MulenPay': settings.is_mulenpay_enabled(),
             'PAL24': settings.is_pal24_enabled(),
             'Tribute': settings.TRIBUTE_ENABLED,
@@ -1260,6 +1262,9 @@ def _build_settings_keyboard(
     elif category_key == 'SEVERPAY':
         label = texts.t('PAYMENT_SEVERPAY', f'💳 {settings.get_severpay_display_name()}')
         test_payment_buttons.append([_test_button(f'{label} · тест', 'severpay')])
+    elif category_key == 'LAVA':
+        label = texts.t('PAYMENT_LAVA', f'💳 {settings.get_lava_display_name()}')
+        test_payment_buttons.append([_test_button(f'{label} · тест', 'lava')])
 
     if test_payment_buttons:
         rows.extend(test_payment_buttons)
@@ -2360,6 +2365,57 @@ async def test_payment_provider(
             f'🧪 <b>Тестовый платеж {display_name}</b>\n\n'
             f'💰 Сумма: {texts.format_price(amount_kopeks)}\n'
             f'🆔 Order ID: {payment_result["order_id"]}'
+        )
+        reply_markup = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    types.InlineKeyboardButton(
+                        text='💳 Перейти к оплате',
+                        url=payment_url,
+                    )
+                ]
+            ]
+        )
+        await callback.message.answer(message_text, reply_markup=reply_markup, parse_mode='HTML')
+        await callback.answer(f'✅ Ссылка на платеж {display_name} отправлена', show_alert=True)
+        await _refresh_markup()
+        return
+
+    if method == 'lava':
+        if not settings.is_lava_enabled():
+            await callback.answer('❌ Lava отключена', show_alert=True)
+            return
+
+        amount_kopeks = settings.LAVA_ADMIN_TEST_AMOUNT_KOPEKS
+        if amount_kopeks is None:
+            amount_kopeks = settings.LAVA_EXPECTED_AMOUNT_KOPEKS
+        if amount_kopeks is None:
+            await callback.answer(
+                '❌ Задайте LAVA_ADMIN_TEST_AMOUNT_KOPEKS или LAVA_EXPECTED_AMOUNT_KOPEKS для теста',
+                show_alert=True,
+            )
+            return
+
+        payment_result = await payment_service.create_lava_payment(
+            db=db,
+            user_id=db_user.id,
+            amount_kopeks=amount_kopeks,
+            description='Тестовый платеж Lava (админ)',
+            email=getattr(db_user, 'email', None),
+            language=db_user.language or settings.DEFAULT_LANGUAGE,
+        )
+
+        if not payment_result or not payment_result.get('payment_url'):
+            await callback.answer('❌ Не удалось создать тестовый платеж Lava', show_alert=True)
+            await _refresh_markup()
+            return
+
+        payment_url = payment_result['payment_url']
+        display_name = settings.get_lava_display_name()
+        message_text = (
+            f'🧪 <b>Тестовый платеж {display_name}</b>\n\n'
+            f'💰 Сумма: {texts.format_price(amount_kopeks)}\n'
+            f'🆔 Contract: {payment_result.get("contract_id", "")}'
         )
         reply_markup = types.InlineKeyboardMarkup(
             inline_keyboard=[

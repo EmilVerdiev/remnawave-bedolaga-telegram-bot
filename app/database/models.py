@@ -162,6 +162,7 @@ class PaymentMethod(Enum):
     KASSA_AI = 'kassa_ai'
     RIOPAY = 'riopay'
     SEVERPAY = 'severpay'
+    LAVA = 'lava'
     MANUAL = 'manual'
     BALANCE = 'balance'
 
@@ -876,6 +877,54 @@ class SeverPayPayment(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f'<SeverPayPayment(id={self.id}, order_id={self.order_id}, amount={self.amount_rubles}₽, status={self.status})>'
+
+
+class LavaPayment(Base):
+    """Платежи Lava.top (Public API, контракт invoice v3)."""
+
+    __tablename__ = 'lava_payments'
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+
+    contract_id = Column(String(36), unique=True, nullable=False, index=True)
+    offer_id = Column(String(36), nullable=False)
+
+    amount_kopeks = Column(Integer, nullable=False)
+    currency = Column(String(10), nullable=False, default='RUB')
+    payment_url = Column(Text, nullable=True)
+    email = Column(String(255), nullable=True)
+
+    status = Column(String(32), nullable=True)
+    is_paid = Column(Boolean, default=False)
+
+    metadata_json = Column(JSON, nullable=True)
+    callback_payload = Column(JSON, nullable=True)
+
+    paid_at = Column(AwareDateTime(), nullable=True)
+    expires_at = Column(AwareDateTime(), nullable=True)
+    created_at = Column(AwareDateTime(), default=func.now())
+    updated_at = Column(AwareDateTime(), default=func.now(), onupdate=func.now())
+
+    transaction_id = Column(Integer, ForeignKey('transactions.id'), nullable=True)
+
+    user = relationship('User', backref='lava_payments')
+    transaction = relationship('Transaction', backref='lava_payment')
+
+    @property
+    def amount_rubles(self) -> float:
+        return self.amount_kopeks / 100
+
+    @property
+    def is_pending(self) -> bool:
+        return self.status == 'pending'
+
+    @property
+    def is_success(self) -> bool:
+        return self.status == 'success' and self.is_paid
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f'<LavaPayment(id={self.id}, contract_id={self.contract_id}, amount={self.amount_rubles}₽)>'
 
 
 class PromoGroup(Base):

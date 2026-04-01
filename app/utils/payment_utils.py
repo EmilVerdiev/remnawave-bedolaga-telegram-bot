@@ -184,6 +184,18 @@ def get_available_payment_methods() -> list[dict[str, str]]:
             }
         )
 
+    if settings.is_lava_enabled():
+        lava_name = settings.get_lava_display_name()
+        methods.append(
+            {
+                'id': 'lava',
+                'name': f'Оплата ({lava_name})',
+                'icon': '💳',
+                'description': f'через {lava_name}',
+                'callback': 'topup_lava',
+            }
+        )
+
     if settings.is_support_topup_enabled():
         methods.append(
             {
@@ -311,6 +323,8 @@ def is_payment_method_available(method_id: str) -> bool:
         return settings.is_kassa_ai_enabled()
     if method_id == 'riopay':
         return settings.is_riopay_enabled()
+    if method_id == 'lava':
+        return settings.is_lava_enabled()
     if method_id == 'support':
         return settings.is_support_topup_enabled()
     return False
@@ -333,6 +347,8 @@ def get_payment_method_status() -> dict[str, bool]:
         'cloudpayments': settings.is_cloudpayments_enabled(),
         'freekassa': settings.is_freekassa_enabled(),
         'kassa_ai': settings.is_kassa_ai_enabled(),
+        'riopay': settings.is_riopay_enabled(),
+        'lava': settings.is_lava_enabled(),
         'support': settings.is_support_topup_enabled(),
     }
 
@@ -365,5 +381,9 @@ def get_enabled_payment_methods_count() -> int:
     if settings.is_freekassa_enabled():
         count += 1
     if settings.is_kassa_ai_enabled():
+        count += 1
+    if settings.is_riopay_enabled():
+        count += 1
+    if settings.is_lava_enabled():
         count += 1
     return count

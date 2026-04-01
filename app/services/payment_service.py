@@ -33,6 +33,7 @@ from app.services.payment import (
 from app.services.payment.cloudpayments import CloudPaymentsPaymentMixin
 from app.services.payment.freekassa import FreekassaPaymentMixin
 from app.services.payment.kassa_ai import KassaAiPaymentMixin
+from app.services.payment.lava import LavaPaymentMixin
 from app.services.payment.riopay import RioPayPaymentMixin
 from app.services.payment.severpay import SeverPayPaymentMixin
 from app.services.platega_service import PlategaService
@@ -353,6 +354,7 @@ class PaymentService(
     CloudPaymentsPaymentMixin,
     FreekassaPaymentMixin,
     KassaAiPaymentMixin,
+    LavaPaymentMixin,
     RioPayPaymentMixin,
     SeverPayPaymentMixin,
 ):
@@ -402,6 +404,9 @@ class PaymentService(
     #   - cloudpayments
     #   - freekassa
     #   - kassa_ai
+    #   - riopay
+    #   - severpay
+    #   - lava
     #   - telegram_stars
     #   - tribute
     # Each provider returns a different result dict; the caller must
@@ -771,6 +776,27 @@ class PaymentService(
                     'payment_url': result.get('payment_url'),
                     'payment_id': result.get('severpay_id') or result.get('order_id'),
                     'provider': 'severpay',
+                }
+            return None
+
+        # --- Lava -------------------------------------------------------------
+        if payment_method == 'lava':
+            if not settings.is_lava_enabled():
+                logger.warning('Lava is not enabled, cannot create guest payment')
+                return None
+
+            result = await self.create_lava_payment(
+                db=db,
+                user_id=None,
+                amount_kopeks=amount_kopeks,
+                description=description,
+            )
+            if result:
+                await _patch_guest_metadata(result['local_payment_id'], 'lava')
+                return {
+                    'payment_url': result.get('payment_url'),
+                    'payment_id': result.get('contract_id') or result.get('order_id'),
+                    'provider': 'lava',
                 }
             return None
 

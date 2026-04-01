@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -13,7 +14,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.database.database import get_db
-from app.external import yookassa_webhook as yookassa_webhook_module
+from app.external import lava_webhook as lava_webhook_module, yookassa_webhook as yookassa_webhook_module
 from app.external.heleket_webhook import HeleketWebhookHandler
 from app.external.pal24_client import Pal24APIError
 from app.external.tribute import TributeService as TributeAPI
@@ -24,6 +25,38 @@ from app.services.tribute_service import TributeService
 
 
 logger = structlog.get_logger(__name__)
+
+
+def _lava_webhook_auth_ok(request: Request) -> bool:
+    """Проверка auth по документации Lava: X-Api-Key и/или HTTP Basic."""
+    secret = (settings.LAVA_WEBHOOK_SECRET or '').strip()
+    basic_user = (settings.LAVA_WEBHOOK_BASIC_USER or '').strip()
+    basic_password = (settings.LAVA_WEBHOOK_BASIC_PASSWORD or '').strip()
+
+    has_api_key = bool(secret)
+    has_basic = bool(basic_user and basic_password)
+
+    if not has_api_key and not has_basic:
+        return True
+
+    if has_api_key:
+        received = request.headers.get('X-Api-Key') or request.headers.get('x-api-key')
+        if received and hmac.compare_digest(str(received).strip(), secret):
+            return True
+
+    if has_basic:
+        auth_header = request.headers.get('Authorization') or ''
+        if auth_header.lower().startswith('basic '):
+            try:
+                raw = base64.b64decode(auth_header[6:].strip())
+                decoded = raw.decode('utf-8')
+                user, sep, password = decoded.partition(':')
+                if sep and hmac.compare_digest(user, basic_user) and hmac.compare_digest(password, basic_password):
+                    return True
+            except (UnicodeDecodeError, ValueError, binascii.Error):
+                pass
+
+    return False
 
 
 def _create_cors_response() -> Response:
@@ -1241,6 +1274,86 @@ def create_payment_router(bot: Bot, payment_service: PaymentService) -> APIRoute
 
         routes_registered = True
 
+    if settings.is_lava_enabled():
+
+        @router.options(settings.LAVA_WEBHOOK_PATH)
+        async def lava_options() -> Response:
+            return Response(
+                status_code=status.HTTP_200_OK,
+                headers={
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type, X-Api-Key, Authorization',
+                },
+            )
+
+        @router.get(settings.LAVA_WEBHOOK_PATH)
+        async def lava_health() -> JSONResponse:
+            return JSONResponse(
+                {
+                    'status': 'ok',
+                    'service': 'lava_webhook',
+                    'enabled': settings.is_lava_enabled(),
+                }
+            )
+
+        @router.post(settings.LAVA_WEBHOOK_PATH)
+        async def lava_webhook(request: Request) -> JSONResponse:
+            header_ip_candidates = lava_webhook_module.collect_lava_ip_candidates(
+                request.headers.get('X-Forwarded-For'),
+                request.headers.get('X-Real-IP'),
+                request.headers.get('Cf-Connecting-Ip'),
+            )
+            remote_ip = request.client.host if request.client else None
+            client_ip = lava_webhook_module.resolve_lava_ip(header_ip_candidates, remote=remote_ip)
+
+            if client_ip is None or not lava_webhook_module.is_lava_webhook_ip_allowed(client_ip):
+                logger.warning('Lava webhook: forbidden ip', client_ip=client_ip)
+                return JSONResponse(
+                    {'status': 'error', 'reason': 'forbidden_ip'},
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
+
+            if not _lava_webhook_auth_ok(request):
+                logger.warning('Lava webhook: unauthorized (X-Api-Key или Basic)')
+                return JSONResponse(
+                    {'status': 'error', 'reason': 'unauthorized'},
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
+
+            try:
+                raw_body = await request.body()
+                payload = json.loads(raw_body.decode('utf-8')) if raw_body else {}
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as parse_error:
+                logger.error('Lava webhook: invalid JSON', parse_error=parse_error)
+                return JSONResponse({'status': 'error', 'reason': 'invalid_json'}, status_code=status.HTTP_400_BAD_REQUEST)
+
+            if not isinstance(payload, dict):
+                return JSONResponse({'status': 'error', 'reason': 'invalid_body'}, status_code=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                success = await _process_payment_service_callback(
+                    payment_service,
+                    payload,
+                    'process_lava_webhook',
+                )
+                if success:
+                    return JSONResponse({'status': 'ok'}, status_code=status.HTTP_200_OK)
+
+                logger.error('Lava webhook processing failed', contract_id=payload.get('contractId'))
+                return JSONResponse(
+                    {'status': 'error', 'reason': 'processing_failed'},
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            except Exception as e:
+                logger.exception('Lava webhook processing error', e=e)
+                return JSONResponse(
+                    {'status': 'error', 'reason': 'processing_failed'},
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        routes_registered = True
+
     if routes_registered:
 
         @router.get('/health/payment-webhooks')
@@ -1261,6 +1374,7 @@ def create_payment_router(bot: Bot, payment_service: PaymentService) -> APIRoute
                     'kassa_ai_enabled': settings.is_kassa_ai_enabled(),
                     'riopay_enabled': settings.is_riopay_enabled(),
                     'severpay_enabled': settings.is_severpay_enabled(),
+                    'lava_enabled': settings.is_lava_enabled(),
                 }
             )
 

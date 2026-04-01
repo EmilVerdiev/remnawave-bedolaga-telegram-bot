@@ -793,6 +793,34 @@ async def create_topup(
                     detail='Failed to create SeverPay payment',
                 )
 
+        elif request.payment_method == 'lava':
+            if not settings.is_lava_enabled():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail='Lava payment method is unavailable',
+                )
+
+            payment_service = PaymentService()
+            result = await payment_service.create_lava_payment(
+                db=db,
+                user_id=user.id,
+                amount_kopeks=request.amount_kopeks,
+                description=settings.get_balance_payment_description(
+                    request.amount_kopeks, telegram_user_id=user.telegram_id, user_db_id=user.id
+                ),
+                email=getattr(user, 'email', None),
+                language=getattr(user, 'language', None) or settings.DEFAULT_LANGUAGE,
+            )
+
+            if result and result.get('payment_url'):
+                payment_url = result.get('payment_url')
+                payment_id = str(result.get('local_payment_id') or result.get('contract_id') or 'pending')
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail='Failed to create Lava payment',
+                )
+
         else:
             # For other payment methods, redirect to bot
             raise HTTPException(
@@ -944,6 +972,14 @@ def _get_status_info(record: PendingPayment) -> tuple[str, str]:
         }
         return mapping.get(status, ('❓', 'Неизвестно'))
 
+    if record.method == PaymentMethod.LAVA:
+        mapping = {
+            'pending': ('⏳', 'Ожидает оплаты'),
+            'success': ('✅', 'Оплачено'),
+            'failed': ('❌', 'Ошибка'),
+        }
+        return mapping.get(status, ('❓', 'Неизвестно'))
+
     return '❓', 'Неизвестно'
 
 
@@ -975,7 +1011,7 @@ def _is_checkable(record: PendingPayment) -> bool:
     if record.method == PaymentMethod.KASSA_AI:
         return status in {'pending', 'created', 'processing'}
     if record.method == PaymentMethod.RIOPAY:
-        return status in {'pending'}
+        return status == 'pending'
     return False
 
 
@@ -1004,6 +1040,7 @@ def _get_payment_url(record: PendingPayment) -> str | None:
         PaymentMethod.FREEKASSA,
         PaymentMethod.KASSA_AI,
         PaymentMethod.RIOPAY,
+        PaymentMethod.LAVA,
     ):
         payment_url = getattr(payment, 'payment_url', None) or payment_url
 
@@ -1090,6 +1127,7 @@ async def get_latest_payment_by_method(
         FreekassaPayment,
         HeleketPayment,
         KassaAiPayment,
+        LavaPayment,
         MulenPayPayment,
         Pal24Payment,
         PlategaPayment,
@@ -1110,6 +1148,7 @@ async def get_latest_payment_by_method(
         PaymentMethod.FREEKASSA: FreekassaPayment,
         PaymentMethod.KASSA_AI: KassaAiPayment,
         PaymentMethod.RIOPAY: RioPayPayment,
+        PaymentMethod.LAVA: LavaPayment,
     }
 
     model = model_map.get(payment_method)
@@ -1136,10 +1175,15 @@ async def get_latest_payment_by_method(
             detail='No recent payments found',
         )
 
+    if payment_method == PaymentMethod.LAVA:
+        identifier = str(getattr(payment, 'contract_id', None) or payment.id)
+    else:
+        identifier = str(getattr(payment, 'correlation_id', None) or payment.id)
+
     record = PendingPayment(
         local_id=payment.id,
         method=payment_method,
-        identifier=str(getattr(payment, 'correlation_id', None) or payment.id),
+        identifier=identifier,
         amount_kopeks=payment.amount_kopeks,
         status=payment.status or '',
         is_paid=bool(payment.is_paid),

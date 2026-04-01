@@ -149,6 +149,25 @@ async def route_payment_by_method(
             await process_severpay_payment_amount(message, db_user, db, amount_kopeks, state)
         return True
 
+    if payment_method in ('lava', 'lava_sbp', 'lava_card'):
+        from .lava import process_lava_payment_amount
+
+        async with AsyncSessionLocal() as db:
+            lava_method_type = None
+            if payment_method == 'lava_sbp':
+                lava_method_type = 'SBP'
+            elif payment_method == 'lava_card':
+                lava_method_type = 'CARD'
+            await process_lava_payment_amount(
+                message,
+                db_user,
+                db,
+                amount_kopeks,
+                state,
+                lava_payment_method_type=lava_method_type,
+            )
+        return True
+
     if payment_method == 'riopay':
         from .riopay import process_riopay_payment_amount
 
@@ -716,6 +735,10 @@ def register_balance_handlers(dp: Dispatcher):
     from .severpay import start_severpay_topup
 
     dp.callback_query.register(start_severpay_topup, F.data == 'topup_severpay')
+
+    from .lava import start_lava_topup
+
+    dp.callback_query.register(start_lava_topup, F.data == 'topup_lava')
 
     from .mulenpay import check_mulenpay_payment_status
 

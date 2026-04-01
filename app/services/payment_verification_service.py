@@ -23,6 +23,7 @@ from app.database.models import (
     FreekassaPayment,
     HeleketPayment,
     KassaAiPayment,
+    LavaPayment,
     MulenPayPayment,
     Pal24Payment,
     PaymentMethod,
@@ -125,6 +126,8 @@ def method_display_name(method: PaymentMethod) -> str:
         return settings.get_riopay_display_name()
     if method == PaymentMethod.SEVERPAY:
         return settings.get_severpay_display_name()
+    if method == PaymentMethod.LAVA:
+        return settings.get_lava_display_name()
     if method == PaymentMethod.TELEGRAM_STARS:
         return 'Telegram Stars'
     return method.value
@@ -155,6 +158,8 @@ def _method_is_enabled(method: PaymentMethod) -> bool:
         return settings.is_riopay_enabled()
     if method == PaymentMethod.SEVERPAY:
         return settings.is_severpay_enabled()
+    if method == PaymentMethod.LAVA:
+        return settings.is_lava_enabled()
     return False
 
 
@@ -401,7 +406,14 @@ def _is_riopay_pending(payment: RioPayPayment) -> bool:
     if payment.is_paid:
         return False
     status = (payment.status or '').lower()
-    return status in {'pending'}
+    return status == 'pending'
+
+
+def _is_lava_pending(payment: LavaPayment) -> bool:
+    if payment.is_paid:
+        return False
+    status = (payment.status or '').lower()
+    return status == 'pending' or status == ''
 
 
 def _parse_cryptobot_amount_kopeks(payment: CryptoBotPayment) -> int:
@@ -773,6 +785,32 @@ async def _fetch_severpay_payments(db: AsyncSession, cutoff: datetime) -> list[P
     return records
 
 
+async def _fetch_lava_payments(db: AsyncSession, cutoff: datetime) -> list[PendingPayment]:
+    stmt = (
+        select(LavaPayment)
+        .options(selectinload(LavaPayment.user))
+        .where(LavaPayment.created_at >= cutoff)
+        .order_by(desc(LavaPayment.created_at))
+    )
+    result = await db.execute(stmt)
+    records: list[PendingPayment] = []
+    for payment in result.scalars().all():
+        if not _is_lava_pending(payment):
+            continue
+        record = _build_record(
+            PaymentMethod.LAVA,
+            payment,
+            identifier=payment.contract_id,
+            amount_kopeks=payment.amount_kopeks,
+            status=payment.status or '',
+            is_paid=bool(payment.is_paid),
+            expires_at=getattr(payment, 'expires_at', None),
+        )
+        if record:
+            records.append(record)
+    return records
+
+
 async def _fetch_stars_transactions(db: AsyncSession, cutoff: datetime) -> list[PendingPayment]:
     stmt = (
         select(Transaction)
@@ -822,6 +860,7 @@ async def list_recent_pending_payments(
         await _fetch_kassa_ai_payments(db, cutoff),
         await _fetch_riopay_payments(db, cutoff),
         await _fetch_severpay_payments(db, cutoff),
+        await _fetch_lava_payments(db, cutoff),
         await _fetch_stars_transactions(db, cutoff),
     )
 
@@ -1014,6 +1053,21 @@ async def get_payment_record(
             method,
             payment,
             identifier=payment.order_id,
+            amount_kopeks=payment.amount_kopeks,
+            status=payment.status or '',
+            is_paid=bool(payment.is_paid),
+            expires_at=getattr(payment, 'expires_at', None),
+        )
+
+    if method == PaymentMethod.LAVA:
+        payment = await db.get(LavaPayment, local_payment_id)
+        if not payment:
+            return None
+        await db.refresh(payment, attribute_names=['user'])
+        return _build_record(
+            method,
+            payment,
+            identifier=payment.contract_id,
             amount_kopeks=payment.amount_kopeks,
             status=payment.status or '',
             is_paid=bool(payment.is_paid),

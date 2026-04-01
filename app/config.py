@@ -583,6 +583,45 @@ class Settings(BaseSettings):
     SEVERPAY_RETURN_URL: str | None = None
     SEVERPAY_LIFETIME: int = 1440  # minutes, 30-4320
 
+    # Lava.top (Public API https://gate.lava.top — офферы и цены в кабинете автора)
+    LAVA_ENABLED: bool = False
+    LAVA_API_KEY: str | None = None
+    # Секрет для заголовка X-Api-Key на ваш webhook (как в настройках webhook в Lava)
+    LAVA_WEBHOOK_SECRET: str | None = None
+    # Альтернатива API Key: Basic HTTP (логин/пароль из кабинета Lava → вид аутентификации Basic)
+    LAVA_WEBHOOK_BASIC_USER: str | None = None
+    LAVA_WEBHOOK_BASIC_PASSWORD: str | None = None
+    LAVA_WEBHOOK_PATH: str = '/lava-webhook'
+    LAVA_DISPLAY_NAME: str = 'Lava.top'
+    LAVA_CURRENCY: str = 'RUB'
+    LAVA_BUYER_LANGUAGE: str | None = 'RU'
+    LAVA_HTTP_TIMEOUT_SECONDS: float = 45.0
+    LAVA_PAYMENT_TIMEOUT_SECONDS: int = 86400
+    LAVA_MIN_AMOUNT_KOPEKS: int = 10000
+    LAVA_MAX_AMOUNT_KOPEKS: int = 100000000
+    # Один оффер: UUID оффера и точная сумма в копейках (= цена оффера в Lava)
+    LAVA_DEFAULT_OFFER_ID: str | None = None
+    LAVA_EXPECTED_AMOUNT_KOPEKS: int | None = None
+    # Или JSON: {"50000":"<uuid-оффера-500руб>","100000":"<uuid>"}
+    LAVA_OFFER_AMOUNTS_MAP_JSON: str | None = None
+    # Если JSON пустой — подтянуть офферы из GET /api/v2/products (offer id из offers[].id, не product id)
+    LAVA_FETCH_PRODUCTS_FROM_API: bool = True
+    LAVA_API_PRODUCTS_CACHE_TTL_SECONDS: int = 120
+    # Через запятую, например DIGITAL_PRODUCT; пусто — без фильтра по типу продукта
+    LAVA_API_PRODUCT_TYPES: str = 'DIGITAL_PRODUCT'
+    LAVA_PLACEHOLDER_EMAIL_TEMPLATE: str = 'tg_{user_id}@telegram.bot'
+    LAVA_PAYMENT_PROVIDER: str | None = None
+    LAVA_PAYMENT_METHOD_TYPE: str | None = None
+    # Сумма тестового платежа из админки (если не задана — LAVA_EXPECTED_AMOUNT_KOPEKS)
+    LAVA_ADMIN_TEST_AMOUNT_KOPEKS: int | None = None
+
+    @field_validator('LAVA_EXPECTED_AMOUNT_KOPEKS', 'LAVA_ADMIN_TEST_AMOUNT_KOPEKS', mode='before')
+    @classmethod
+    def _lava_optional_int_from_env(cls, v: object) -> object:
+        if v == '' or v is None:
+            return None
+        return v
+
     MAIN_MENU_MODE: str = 'default'  # 'default' | 'cabinet'
     # Стиль кнопок Cabinet: primary (синий), success (зелёный), danger (красный), '' (по умолчанию для каждой секции)
     CABINET_BUTTON_STYLE: str = ''
@@ -1960,6 +1999,16 @@ class Settings(BaseSettings):
 
     def get_severpay_display_name_html(self) -> str:
         return html.escape(self.get_severpay_display_name())
+
+    def is_lava_enabled(self) -> bool:
+        return bool(self.LAVA_ENABLED and self.LAVA_API_KEY)
+
+    def get_lava_display_name(self) -> str:
+        name = (self.LAVA_DISPLAY_NAME or '').strip()
+        return name if name else 'Lava.top'
+
+    def get_lava_display_name_html(self) -> str:
+        return html.escape(self.get_lava_display_name())
 
     def is_kassa_ai_sbp_enabled(self) -> bool:
         return self.KASSA_AI_SBP_ENABLED and self.is_kassa_ai_enabled()

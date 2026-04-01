@@ -20,6 +20,7 @@ from app.database.models import (
     FreekassaPayment,
     HeleketPayment,
     KassaAiPayment,
+    LavaPayment,
     MulenPayPayment,
     Pal24Payment,
     PaymentMethod,
@@ -649,6 +650,35 @@ async def _search_severpay(db: AsyncSession, params: SearchParams) -> list[Pendi
     return records
 
 
+async def _search_lava(db: AsyncSession, params: SearchParams) -> list[PendingPayment]:
+    stmt = select(LavaPayment).options(selectinload(LavaPayment.user)).order_by(desc(LavaPayment.created_at))
+    stmt = _apply_date_filter(stmt, LavaPayment.created_at, params.cutoff, params.upper_bound)
+
+    if params.search:
+        kind = _detect_user_search_kind(params.search)
+        if kind == _UserSearchKind.INVOICE:
+            stmt = stmt.where(LavaPayment.contract_id.ilike(f'%{_escape_like(params.search)}%'))
+        else:
+            stmt = _apply_user_join_filter(stmt, LavaPayment, kind, params.search)
+
+    stmt = stmt.limit(MAX_RECORDS_PER_PROVIDER)
+    result = await db.execute(stmt)
+    records: list[PendingPayment] = []
+    for payment in result.scalars().all():
+        record = _build_record(
+            PaymentMethod.LAVA,
+            payment,
+            identifier=payment.contract_id,
+            amount_kopeks=payment.amount_kopeks,
+            status=payment.status or '',
+            is_paid=bool(payment.is_paid),
+            expires_at=getattr(payment, 'expires_at', None),
+        )
+        if record:
+            records.append(record)
+    return records
+
+
 async def _search_stars(db: AsyncSession, params: SearchParams) -> list[PendingPayment]:
     stmt = (
         select(Transaction)
@@ -702,6 +732,7 @@ _PROVIDER_SEARCH_MAP: dict[PaymentMethod, Any] = {
     PaymentMethod.KASSA_AI: _search_kassa_ai,
     PaymentMethod.RIOPAY: _search_riopay,
     PaymentMethod.SEVERPAY: _search_severpay,
+    PaymentMethod.LAVA: _search_lava,
     PaymentMethod.TELEGRAM_STARS: _search_stars,
 }
 
