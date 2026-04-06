@@ -78,11 +78,11 @@ async def get_traffic_packages(
                     gb=gb,
                     price_kopeks=price,
                     price_rubles=price / 100,
-                    is_unlimited=False,
+                    is_unlimited=(gb == 0),
                 )
             )
 
-        return sorted(result, key=lambda x: x.gb)
+        return sorted(result, key=lambda x: (x.gb == 0, x.gb))
 
     # Classic режим - глобальные настройки
     if not settings.is_traffic_topup_enabled():
@@ -167,9 +167,9 @@ async def purchase_traffic(
                 detail='Cannot add traffic to unlimited subscription',
             )
 
-        # Проверяем лимит докупки
+        # Проверяем лимит докупки (переход на безлимит не суммируется с ГБ)
         max_topup_limit = getattr(tariff, 'max_topup_traffic_gb', 0) or 0
-        if max_topup_limit > 0:
+        if max_topup_limit > 0 and request.gb != 0:
             current_traffic = subscription.traffic_limit_gb or 0
             new_traffic = current_traffic + request.gb
             if new_traffic > max_topup_limit:
@@ -266,7 +266,7 @@ async def purchase_traffic(
             'base_price_kopeks': prorated_price,
             'discount_percent': traffic_discount_percent,
             'source': 'cabinet',
-            'description': f'Докупка {request.gb} ГБ трафика',
+            'description': 'Докупка безлимитного трафика' if request.gb == 0 else f'Докупка {request.gb} ГБ трафика',
         }
 
         try:
@@ -292,10 +292,13 @@ async def purchase_traffic(
         )
 
     # Формируем описание
+    _traffic_label = 'безлимитного трафика' if request.gb == 0 else f'{request.gb} ГБ трафика'
     if traffic_discount_percent > 0:
-        traffic_description = f'Докупка {request.gb} ГБ трафика (скидка {traffic_discount_percent}%)'
+        traffic_description = f'Докупка {_traffic_label} (скидка {traffic_discount_percent}%)'
     else:
-        traffic_description = f'Докупка {request.gb} ГБ трафика'
+        traffic_description = f'Докупка {_traffic_label}'
+
+    old_traffic_limit_gb = subscription.traffic_limit_gb
 
     # Списываем баланс
     success = await subtract_user_balance(db, user, final_price, traffic_description)
@@ -352,13 +355,12 @@ async def purchase_traffic(
             bot = Bot(token=settings.BOT_TOKEN)
             try:
                 notification_service = AdminNotificationService(bot)
-                old_traffic = subscription.traffic_limit_gb - request.gb
                 await notification_service.send_subscription_update_notification(
                     db=db,
                     user=user,
                     subscription=subscription,
                     update_type='traffic',
-                    old_value=old_traffic,
+                    old_value=old_traffic_limit_gb,
                     new_value=subscription.traffic_limit_gb,
                     price_paid=final_price,
                 )
@@ -483,7 +485,7 @@ async def save_traffic_cart(
         'base_price_kopeks': base_price_kopeks,
         'discount_percent': traffic_discount_percent,
         'source': 'cabinet',
-        'description': f'Докупка {request.gb} ГБ трафика',
+        'description': 'Докупка безлимитного трафика' if request.gb == 0 else f'Докупка {request.gb} ГБ трафика',
     }
     await user_cart_service.save_user_cart(user.id, cart_data)
     logger.info('Cart saved for traffic purchase (cabinet save-cart) user +', user_id=user.id, gb=request.gb)

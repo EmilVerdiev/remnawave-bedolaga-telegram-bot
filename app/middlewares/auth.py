@@ -113,6 +113,7 @@ class AuthMiddleware(BaseMiddleware):
 
                     registration_states = [
                         RegistrationStates.waiting_for_language.state,
+                        RegistrationStates.waiting_for_quick_start_activate.state,
                         RegistrationStates.waiting_for_rules_accept.state,
                         RegistrationStates.waiting_for_privacy_policy_accept.state,
                         RegistrationStates.waiting_for_referral_code.state,
@@ -132,6 +133,7 @@ class AuthMiddleware(BaseMiddleware):
                                     'privacy_policy_accept',
                                     'privacy_policy_decline',
                                     'referral_skip',
+                                    'quick_start_activate_bypass',
                                 ]
                                 or event.data.startswith('language_select:')
                             )

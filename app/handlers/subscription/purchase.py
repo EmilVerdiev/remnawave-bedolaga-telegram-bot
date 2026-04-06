@@ -591,50 +591,44 @@ async def show_subscription_info(callback: types.CallbackQuery, db_user: User, d
     await callback.answer()
 
 
-async def show_trial_offer(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
-    # Проверяем, доступно ли сообщение для редактирования
-    if isinstance(callback.message, InaccessibleMessage):
-        await callback.answer()
-        return
-
-    texts = get_texts(db_user.language)
-
-    # Проверяем, отключён ли триал для этого типа пользователя
-    if settings.is_trial_disabled_for_user(getattr(db_user, 'auth_type', 'telegram')):
-        await callback.message.edit_text(
-            texts.t('TRIAL_DISABLED_FOR_USER_TYPE', 'Пробный период недоступен'),
-            reply_markup=get_back_keyboard(db_user.language),
+def _format_trial_offer_traffic_lines(texts, trial_traffic_gb: int) -> str:
+    """Две строки для экрана триала: Wi‑Fi безлимит; мобильный трафик по белым спискам."""
+    wifi = texts.t(
+        'TRIAL_OFFER_TRAFFIC_WIFI',
+        '📊 Трафик по Wi\u2011Fi: Безлимит',
+    )
+    if trial_traffic_gb == 0:
+        mobile = texts.t(
+            'TRIAL_OFFER_TRAFFIC_MOBILE_UNLIMITED',
+            '📊 Трафик на мобильном интернете при «белых списках»: Безлимит',
         )
-        await callback.answer()
-        return
+    else:
+        mobile = texts.t(
+            'TRIAL_OFFER_TRAFFIC_MOBILE_WHITELIST',
+            '📊 Трафик на мобильном интернете при «белых списках»: {used} / {limit} ГБ',
+        ).format(used=0, limit=trial_traffic_gb)
+    return f'{wifi}\n{mobile}'
 
-    # Проверяем, использовал ли пользователь триал
-    # PENDING триальные подписки не считаются - пользователь может повторить оплату
-    # Multi-tariff note: db_user.subscription returns the first active/most recent
-    # subscription. In multi-tariff mode a user can have multiple subscriptions, but
-    # trial eligibility is still "has any subscription" so this check is correct.
-    trial_blocked = False
+
+def is_user_eligible_for_trial_offer(db_user: User) -> bool:
+    """Можно ли показать предложение триала (ещё не тратился платный триал / нет другой подписки)."""
     if db_user.has_had_paid_subscription:
-        trial_blocked = True
-    elif db_user.subscription:
-        sub = db_user.subscription
-        # Разрешаем если это PENDING триальная подписка (повторная попытка оплаты)
-        if not (sub.status == SubscriptionStatus.PENDING.value and sub.is_trial):
-            trial_blocked = True
+        return False
+    if not db_user.subscription:
+        return True
+    sub = db_user.subscription
+    return sub.status == SubscriptionStatus.PENDING.value and sub.is_trial
 
-    if trial_blocked:
-        await callback.message.edit_text(texts.TRIAL_ALREADY_USED, reply_markup=get_back_keyboard(db_user.language))
-        await callback.answer()
-        return
 
-    # Получаем параметры триала (из тарифа или из глобальных настроек)
+async def compose_trial_offer_text(db_user: User, db: AsyncSession) -> str:
+    """HTML-текст экрана предложения триала (как TRIAL_AVAILABLE)."""
+    texts = get_texts(db_user.language)
     trial_days = settings.TRIAL_DURATION_DAYS
     trial_traffic = settings.TRIAL_TRAFFIC_LIMIT_GB
     trial_device_limit = settings.TRIAL_DEVICE_LIMIT
     trial_tariff = None
     trial_server_name = texts.t('TRIAL_SERVER_DEFAULT_NAME', '🎯 Тестовый сервер')
 
-    # Проверяем триальный тариф
     if settings.is_tariffs_mode():
         try:
             from app.database.crud.tariff import get_tariff_by_id as get_tariff, get_trial_tariff
@@ -658,7 +652,6 @@ async def show_trial_offer(callback: types.CallbackQuery, db_user: User, db: Asy
     try:
         from app.database.crud.server_squad import get_trial_eligible_server_squads
 
-        # Для тарифа используем его сервера
         if trial_tariff and trial_tariff.allowed_squads:
             from app.database.crud.server_squad import get_server_squads_by_uuids
 
@@ -711,16 +704,44 @@ async def show_trial_offer(callback: types.CallbackQuery, db_user: User, db: Asy
                 '\n💳 <b>Стоимость активации:</b> {price}',
             ).format(price=settings.format_price(trial_price))
 
-    trial_text = texts.TRIAL_AVAILABLE.format(
+    return texts.TRIAL_AVAILABLE.format(
         days=trial_days,
-        traffic=texts.format_traffic(trial_traffic),
+        traffic=_format_trial_offer_traffic_lines(texts, trial_traffic),
         devices=trial_device_limit if trial_device_limit is not None else '',
         devices_line=devices_line,
         server_name=trial_server_name,
         price_line=price_line,
     )
 
-    await callback.message.edit_text(trial_text, reply_markup=get_trial_keyboard(db_user.language))
+
+async def show_trial_offer(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
+    # Проверяем, доступно ли сообщение для редактирования
+    if isinstance(callback.message, InaccessibleMessage):
+        await callback.answer()
+        return
+
+    texts = get_texts(db_user.language)
+
+    # Проверяем, отключён ли триал для этого типа пользователя
+    if settings.is_trial_disabled_for_user(getattr(db_user, 'auth_type', 'telegram')):
+        await callback.message.edit_text(
+            texts.t('TRIAL_DISABLED_FOR_USER_TYPE', 'Пробный период недоступен'),
+            reply_markup=get_back_keyboard(db_user.language),
+        )
+        await callback.answer()
+        return
+
+    if not is_user_eligible_for_trial_offer(db_user):
+        await callback.message.edit_text(texts.TRIAL_ALREADY_USED, reply_markup=get_back_keyboard(db_user.language))
+        await callback.answer()
+        return
+
+    trial_text = await compose_trial_offer_text(db_user, db)
+    await callback.message.edit_text(
+        trial_text,
+        reply_markup=get_trial_keyboard(db_user.language),
+        parse_mode='HTML',
+    )
     await callback.answer()
 
 
@@ -858,13 +879,11 @@ async def activate_trial(callback: types.CallbackQuery, db_user: User, db: Async
             except Exception as e:
                 logger.error('Ошибка получения триального тарифа для платного триала', error=e)
 
-        traffic_label = 'Безлимит' if paid_trial_traffic == 0 else f'{paid_trial_traffic} ГБ'
-
         message_lines = [
             texts.t('PAID_TRIAL_HEADER', '⚡ <b>Пробная подписка</b>'),
             '',
             f'📅 {texts.t("PERIOD", "Период")}: {paid_trial_days} {texts.t("DAYS", "дней")}',
-            f'📊 {texts.t("TRAFFIC", "Трафик")}: {traffic_label}',
+            *_format_trial_offer_traffic_lines(texts, paid_trial_traffic).split('\n'),
             f'📱 {texts.t("DEVICES", "Устройства")}: {paid_trial_devices}',
             '',
             f'💰 {texts.t("PRICE", "Стоимость")}: {settings.format_price(trial_price_kopeks)}',

@@ -253,9 +253,8 @@ def _format_traffic_topup_packages(tariff: Tariff) -> str:
         return '✅ Включено, но пакеты не настроены'
 
     lines = ['✅ Включено']
-    for gb in sorted(packages.keys()):
-        price = packages[gb]
-        lines.append(f'  • {gb} ГБ: {format_price_kopeks(price)}')
+    for gb, price in _sorted_traffic_topup_items(packages):
+        lines.append(f'  • {_traffic_topup_gb_display(gb)}: {format_price_kopeks(price)}')
 
     return '\n'.join(lines)
 
@@ -1691,7 +1690,8 @@ async def process_edit_tariff_trial_days(
 def _parse_traffic_topup_packages(text: str) -> dict[int, int]:
     """
     Парсит строку с пакетами докупки трафика.
-    Формат: "5:5000, 10:9000, 20:15000" (ГБ:цена_в_копейках)
+    Формат: "5:5000, 10:9000, 20:15000" (ГБ:цена_в_копейках).
+    Для безлимита укажите 0:цена (например 0:20000).
     """
     packages = {}
     text = text.replace(';', ',').replace('=', ':')
@@ -1708,12 +1708,20 @@ def _parse_traffic_topup_packages(text: str) -> dict[int, int]:
         try:
             gb = int(gb_str.strip())
             price = int(price_str.strip())
-            if gb > 0 and price > 0:
+            if gb >= 0 and price > 0:
                 packages[gb] = price
         except ValueError:
             continue
 
     return packages
+
+
+def _traffic_topup_gb_display(gb: int) -> str:
+    return '♾️ безлимит' if gb == 0 else f'{gb} ГБ'
+
+
+def _sorted_traffic_topup_items(packages: dict[int, int]) -> list[tuple[int, int]]:
+    return sorted(packages.items(), key=lambda x: (x[0] == 0, x[0]))
 
 
 def _format_traffic_topup_packages_for_edit(packages: dict[int, int]) -> str:
@@ -1722,8 +1730,8 @@ def _format_traffic_topup_packages_for_edit(packages: dict[int, int]) -> str:
         return '5:5000, 10:9000, 20:15000'
 
     parts = []
-    for gb in sorted(packages.keys()):
-        parts.append(f'{gb}:{packages[gb]}')
+    for gb, price in _sorted_traffic_topup_items(packages):
+        parts.append(f'{gb}:{price}')
 
     return ', '.join(parts)
 
@@ -1759,7 +1767,8 @@ async def start_edit_tariff_traffic_topup(
         status = '✅ Включено'
         if packages:
             packages_display = '\n'.join(
-                f'  • {gb} ГБ: {format_price_kopeks(price)}' for gb, price in sorted(packages.items())
+                f'  • {_traffic_topup_gb_display(gb)}: {format_price_kopeks(price)}'
+                for gb, price in _sorted_traffic_topup_items(packages)
             )
         else:
             packages_display = '  Пакеты не настроены'
@@ -1848,7 +1857,8 @@ async def toggle_tariff_traffic_topup(
         status = '✅ Включено'
         if packages:
             packages_display = '\n'.join(
-                f'  • {gb} ГБ: {format_price_kopeks(price)}' for gb, price in sorted(packages.items())
+                f'  • {_traffic_topup_gb_display(gb)}: {format_price_kopeks(price)}'
+                for gb, price in _sorted_traffic_topup_items(packages)
             )
         else:
             packages_display = '  Пакеты не настроены'
@@ -1928,7 +1938,8 @@ async def start_edit_traffic_topup_packages(
 
     if packages:
         packages_display = '\n'.join(
-            f'  • {gb} ГБ: {format_price_kopeks(price)}' for gb, price in sorted(packages.items())
+            f'  • {_traffic_topup_gb_display(gb)}: {format_price_kopeks(price)}'
+            for gb, price in _sorted_traffic_topup_items(packages)
         )
     else:
         packages_display = '  Не настроены'
@@ -1939,8 +1950,8 @@ async def start_edit_traffic_topup_packages(
         f'<b>Текущие пакеты:</b>\n{packages_display}\n\n'
         'Введите пакеты в формате:\n'
         f'<code>{current_packages}</code>\n\n'
-        '(ГБ:цена_в_копейках, через запятую)\n'
-        'Например: <code>5:5000, 10:9000</code> = 5ГБ за 50₽, 10ГБ за 90₽',
+        '(ГБ:цена_в_копейках, через запятую; <b>0</b> = безлимит)\n'
+        'Например: <code>5:5000, 10:9000, 0:20000</code> — пакеты и безлимит за 200₽',
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text=texts.CANCEL, callback_data=f'admin_tariff_edit_traffic_topup:{tariff_id}')]
@@ -1972,8 +1983,8 @@ async def process_edit_traffic_topup_packages(
     if not message.text:
         await message.answer(
             'Пожалуйста, отправьте текстовое сообщение.\n\n'
-            'Формат: <code>ГБ:цена_в_копейках</code>\n'
-            'Пример: <code>5:5000, 10:9000, 20:15000</code>',
+            'Формат: <code>ГБ:цена_в_копейках</code> (0 = безлимит)\n'
+            'Пример: <code>5:5000, 10:9000, 20:15000, 0:20000</code>',
             parse_mode='HTML',
         )
         return
@@ -1983,8 +1994,8 @@ async def process_edit_traffic_topup_packages(
     if not packages:
         await message.answer(
             'Не удалось распознать пакеты.\n\n'
-            'Формат: <code>ГБ:цена_в_копейках</code>\n'
-            'Пример: <code>5:5000, 10:9000, 20:15000</code>',
+            'Формат: <code>ГБ:цена_в_копейках</code> (0 = безлимит)\n'
+            'Пример: <code>5:5000, 10:9000, 20:15000, 0:20000</code>',
             parse_mode='HTML',
         )
         return
@@ -1997,7 +2008,10 @@ async def process_edit_traffic_topup_packages(
 
     # Показываем обновленное меню
     texts = get_texts(db_user.language)
-    packages_display = '\n'.join(f'  • {gb} ГБ: {format_price_kopeks(price)}' for gb, price in sorted(packages.items()))
+    packages_display = '\n'.join(
+        f'  • {_traffic_topup_gb_display(gb)}: {format_price_kopeks(price)}'
+        for gb, price in _sorted_traffic_topup_items(packages)
+    )
     max_topup_traffic = getattr(tariff, 'max_topup_traffic_gb', 0) or 0
     max_limit_display = f'{max_topup_traffic} ГБ' if max_topup_traffic > 0 else 'Без ограничений'
 
@@ -2111,7 +2125,8 @@ async def process_edit_max_topup_traffic(
     packages = tariff.get_traffic_topup_packages() if hasattr(tariff, 'get_traffic_topup_packages') else {}
     if packages:
         packages_display = '\n'.join(
-            f'  • {gb} ГБ: {format_price_kopeks(price)}' for gb, price in sorted(packages.items())
+            f'  • {_traffic_topup_gb_display(gb)}: {format_price_kopeks(price)}'
+            for gb, price in _sorted_traffic_topup_items(packages)
         )
     else:
         packages_display = '  Пакеты не настроены'

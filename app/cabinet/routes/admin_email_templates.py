@@ -452,7 +452,7 @@ SAMPLE_CONTEXTS: dict[str, dict[str, Any]] = {
     },
 }
 
-AVAILABLE_LANGUAGES = ['ru', 'en', 'zh', 'ua', 'fa']
+AVAILABLE_LANGUAGES = ['ru', 'en', 'zh', 'fa']
 
 
 # ============ Schemas ============

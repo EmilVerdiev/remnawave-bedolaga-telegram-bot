@@ -160,9 +160,6 @@ _LANGUAGE_DISPLAY_NAMES = {
     'en': '🇬🇧 English',
     'en-us': '🇺🇸 English',
     'en-gb': '🇬🇧 English',
-    'ua': '🇺🇦 Українська',
-    'uk': '🇺🇦 Українська',
-    'uk-ua': '🇺🇦 Українська',
     'kk': '🇰🇿 Қазақша',
     'kk-kz': '🇰🇿 Қазақша',
     'kz': '🇰🇿 Қазақша',
@@ -1795,12 +1792,13 @@ def get_payment_methods_keyboard(amount_kopeks: int, language: str = DEFAULT_LAN
         has_direct_payment_methods = True
 
     if settings.is_lava_enabled():
-        lava_name = settings.get_lava_display_name()
+        # При известной сумне (корзина / недостаток) — сразу создаём платёж на эту сумму, без экрана выбора офферов.
+        lava_callback = _build_callback('lava_card') if amount_kopeks > 0 else 'topup_lava'
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    text=texts.t('PAYMENT_LAVA', f'💳 Оплата ({lava_name})'),
-                    callback_data='topup_lava',
+                    text=texts.t('PAYMENT_LAVA', '💳 Банковская карта'),
+                    callback_data=lava_callback,
                 )
             ]
         )
@@ -2216,8 +2214,11 @@ def get_add_traffic_keyboard_from_tariff(
 
     buttons = []
 
-    # Сортируем пакеты по размеру, исключаем пакеты с нулевой ценой
-    sorted_packages = sorted(((gb, p) for gb, p in packages.items() if p > 0), key=lambda x: x[0])
+    # Сортируем пакеты по размеру; безлимит (0 ГБ) в конце. Исключаем нулевую цену.
+    sorted_packages = sorted(
+        ((gb, p) for gb, p in packages.items() if p > 0),
+        key=lambda x: (x[0] == 0, x[0]),
+    )
 
     # Пакеты трафика на тарифах покупаются на 1 месяц (30 дней),
     # цена в тарифе уже месячная — не умножаем на оставшиеся месяцы подписки
@@ -2229,7 +2230,12 @@ def get_add_traffic_keyboard_from_tariff(
 
         period_text = ' /мес' if use_russian_fallback else ' /mo'
 
-        if use_russian_fallback:
+        if gb == 0:
+            if use_russian_fallback:
+                text = f'♾️ Безлимитный трафик - {discounted_price // 100} ₽{period_text}'
+            else:
+                text = f'♾️ Unlimited traffic - {discounted_price // 100} ₽{period_text}'
+        elif use_russian_fallback:
             text = f'📊 +{gb} ГБ трафика - {discounted_price // 100} ₽{period_text}'
         else:
             text = f'📊 +{gb} GB traffic - {discounted_price // 100} ₽{period_text}'

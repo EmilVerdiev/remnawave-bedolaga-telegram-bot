@@ -1741,8 +1741,13 @@ class BackupService:
             self._auto_backup_task.cancel()
 
         if self._settings.auto_backup_enabled:
-            next_run = self._calculate_next_backup_datetime()
             interval = self._get_backup_interval()
+            hours = self._settings.backup_interval_hours
+            # Частые интервалы (< 24 ч): не ждать «якорное» BACKUP_TIME до полуночи — старт через ~30 с.
+            if 0 < hours < 24:
+                next_run = datetime.now(UTC) + timedelta(seconds=30)
+            else:
+                next_run = self._calculate_next_backup_datetime()
             self._auto_backup_task = asyncio.create_task(self._auto_backup_loop(next_run))
             logger.info(
                 '📄 Автобекапы включены, интервал: ч, ближайший запуск',

@@ -1263,7 +1263,7 @@ def _build_settings_keyboard(
         label = texts.t('PAYMENT_SEVERPAY', f'💳 {settings.get_severpay_display_name()}')
         test_payment_buttons.append([_test_button(f'{label} · тест', 'severpay')])
     elif category_key == 'LAVA':
-        label = texts.t('PAYMENT_LAVA', f'💳 {settings.get_lava_display_name()}')
+        label = texts.t('PAYMENT_LAVA', '💳 Банковская карта')
         test_payment_buttons.append([_test_button(f'{label} · тест', 'lava')])
 
     if test_payment_buttons:
@@ -2403,6 +2403,7 @@ async def test_payment_provider(
             description='Тестовый платеж Lava (админ)',
             email=getattr(db_user, 'email', None),
             language=db_user.language or settings.DEFAULT_LANGUAGE,
+            lava_payment_method_type='CARD',
         )
 
         if not payment_result or not payment_result.get('payment_url'):

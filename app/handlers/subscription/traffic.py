@@ -586,7 +586,7 @@ async def add_traffic(callback: types.CallbackQuery, db_user: User, db: AsyncSes
             'base_price_kopeks': discounted_per_month,
             'discount_percent': traffic_discount_pct,
             'source': 'bot',
-            'description': f'Докупка {traffic_gb} ГБ трафика',
+            'description': 'Докупка безлимитного трафика' if traffic_gb == 0 else f'Докупка {traffic_gb} ГБ трафика',
         }
         try:
             await user_cart_service.save_user_cart(db_user.id, cart_data)
@@ -630,26 +630,15 @@ async def add_traffic(callback: types.CallbackQuery, db_user: User, db: AsyncSes
             db,
             db_user,
             price,
-            f'Добавление {traffic_gb} ГБ трафика',
+            'Добавление безлимитного трафика' if traffic_gb == 0 else f'Добавление {traffic_gb} ГБ трафика',
         )
 
         if not success:
             await callback.answer('⚠️ Ошибка списания средств', show_alert=True)
             return
 
-        if traffic_gb == 0:
-            subscription.traffic_limit_gb = 0
-            # При переходе на безлимит сбрасываем все докупки
-            from sqlalchemy import delete
-
-            from app.database.models import TrafficPurchase
-
-            await db.execute(delete(TrafficPurchase).where(TrafficPurchase.subscription_id == subscription.id))
-            subscription.purchased_traffic_gb = 0
-            subscription.traffic_reset_at = None
-        else:
-            # add_subscription_traffic уже создаёт TrafficPurchase и обновляет все необходимые поля
-            await add_subscription_traffic(db, subscription, traffic_gb)
+        # gb==0: безлимит; иначе пакет + TrafficPurchase (логика в crud)
+        await add_subscription_traffic(db, subscription, traffic_gb)
 
         # Реактивируем подписку если она была DISABLED/EXPIRED (например, после LIMITED/EXPIRED в RemnaWave)
         await reactivate_subscription(db, subscription)

@@ -446,8 +446,6 @@ async def request_support_topup(callback: types.CallbackQuery, db_user: User):
 
 <b>Доступные способы:</b>
 • Криптовалюта
-• Переводы между банками
-• Другие платежные системы
 """
 
     keyboard = types.InlineKeyboardMarkup(

@@ -18,11 +18,6 @@ _logger = structlog.get_logger(__name__)
 _cached_rules: dict[str, str] = {}
 
 
-_LANGUAGE_ALIASES = {
-    'uk': 'ua',
-}
-
-
 _DYNAMIC_LANGUAGE_CONFIGS = {
     'ru': {
         'traffic_pattern': '📊 {size} ГБ - {price}',
@@ -58,21 +53,6 @@ _DYNAMIC_LANGUAGE_CONFIGS = {
             '• 📋 My tickets — status and conversation\n'
             '• 💬 Contact — message directly if needed\n\n'
             'Prefer tickets — it helps us respond faster and keep context.\n'
-        ),
-    },
-    'ua': {
-        'traffic_pattern': '📊 {size} ГБ - {price}',
-        'unlimited_pattern': '📊 Безліміт - {price}',
-        'support_info': (
-            '\n🛠️ <b>Технічна підтримка</b>\n\n'
-            'З усіх питань звертайтеся до нашої підтримки:\n\n'
-            '👤 {support_username}\n\n'
-            'Ми допоможемо з:\n'
-            '• Налаштуванням підключення\n'
-            '• Вирішенням технічних проблем\n'
-            '• Питаннями щодо оплати\n'
-            '• Іншими питаннями\n\n'
-            '⏰ Час відповіді: зазвичай протягом 1-2 годин\n'
         ),
     },
     'zh': {
@@ -114,8 +94,8 @@ def _get_cached_rules_value(language: str) -> str:
 
 def _build_dynamic_values(language: str) -> dict[str, Any]:
     language_code = (language or DEFAULT_LANGUAGE).split('-')[0].lower()
-
-    language_code = _LANGUAGE_ALIASES.get(language_code, language_code)
+    if language_code in {'ua', 'uk'}:
+        language_code = 'ru'
     config = _DYNAMIC_LANGUAGE_CONFIGS.get(language_code)
 
     if not config:
@@ -143,7 +123,10 @@ def _build_dynamic_values(language: str) -> dict[str, Any]:
 
 class Texts:
     def __init__(self, language: str = DEFAULT_LANGUAGE):
-        self.language = language or DEFAULT_LANGUAGE
+        code = (language or DEFAULT_LANGUAGE).strip().lower().split('-', 1)[0]
+        if code in {'ua', 'uk'}:
+            code = 'ru'
+        self.language = code
         raw_data = load_locale(self.language)
         self._values = {key: value for key, value in raw_data.items()}
 

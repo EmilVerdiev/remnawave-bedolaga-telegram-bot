@@ -720,12 +720,28 @@ async def extend_subscription(
 
 
 async def add_subscription_traffic(db: AsyncSession, subscription: Subscription, gb: int) -> Subscription:
+    from app.database.models import TrafficPurchase
+
+    # 0 ГБ в пакете докупки = переход на безлимит (как в боте)
+    if gb == 0:
+        subscription.traffic_limit_gb = 0
+        await db.execute(delete(TrafficPurchase).where(TrafficPurchase.subscription_id == subscription.id))
+        subscription.purchased_traffic_gb = 0
+        subscription.traffic_reset_at = None
+        subscription.updated_at = datetime.now(UTC)
+        await db.commit()
+        await db.refresh(subscription)
+        logger.info(
+            'Подписка переведена на безлимитный трафик (докупка)',
+            user_id=subscription.user_id,
+            subscription_id=subscription.id,
+        )
+        return subscription
+
     subscription.add_traffic(gb)
     subscription.updated_at = datetime.now(UTC)
 
     # Создаём новую запись докупки с индивидуальной датой истечения (30 дней)
-    from app.database.models import TrafficPurchase
-
     new_expires_at = datetime.now(UTC) + timedelta(days=30)
     new_purchase = TrafficPurchase(subscription_id=subscription.id, traffic_gb=gb, expires_at=new_expires_at)
     db.add(new_purchase)

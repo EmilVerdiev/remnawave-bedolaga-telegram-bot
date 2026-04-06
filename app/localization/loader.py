@@ -287,7 +287,9 @@ def _merge_dicts(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, A
 
 @cache
 def load_locale(language: str) -> dict[str, Any]:
-    language = language or DEFAULT_LANGUAGE
+    language = _normalize_language_code(language or DEFAULT_LANGUAGE)
+    if language in {'ua', 'uk'}:
+        language = 'ru'
     defaults = _load_default_locale(language)
     overrides = _load_user_locale(language)
     merged = _merge_dicts(defaults, overrides)

@@ -3,6 +3,8 @@ from aiogram.fsm.state import State, StatesGroup
 
 class RegistrationStates(StatesGroup):
     waiting_for_language = State()
+    # Пре-экран маркетинга + кнопка «Активировать обход!» (только при REGISTRATION_QUICK_START)
+    waiting_for_quick_start_activate = State()
     waiting_for_rules_accept = State()
     waiting_for_privacy_policy_accept = State()
     waiting_for_referral_code = State()

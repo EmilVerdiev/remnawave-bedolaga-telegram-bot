@@ -22,7 +22,6 @@ router = APIRouter(prefix='/info', tags=['Cabinet Info'])
 _LANGUAGE_META: dict[str, tuple[str, str]] = {
     'ru': ('Русский', '🇷🇺'),
     'en': ('English', '🇬🇧'),
-    'ua': ('Українська', '🇺🇦'),
     'zh': ('中文', '🇨🇳'),
     'fa': ('فارسی', '🇮🇷'),
 }

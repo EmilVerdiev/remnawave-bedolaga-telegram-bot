@@ -236,11 +236,7 @@ async def start_lava_topup(
         amount_buttons.append(
             [
                 InlineKeyboardButton(
-                    text=f'⚡ СБП {amount_rub:,.0f} ₽'.replace(',', ' '),
-                    callback_data=f'topup_amount|lava_sbp|{amount_kopeks}',
-                ),
-                InlineKeyboardButton(
-                    text=f'💳 Карта {amount_rub:,.0f} ₽'.replace(',', ' '),
+                    text=f'💳 {amount_rub:,.0f} ₽'.replace(',', ' '),
                     callback_data=f'topup_amount|lava_card|{amount_kopeks}',
                 ),
             ]
@@ -260,7 +256,7 @@ async def start_lava_topup(
         texts.t(
             'LAVA_SELECT_AMOUNT',
             '💳 <b>Пополнение через {name}</b>\n\n'
-            'Выберите способ и сумму пополнения.\n'
+            'Выберите сумму пополнения (оплата банковской картой).\n'
             'Для каждой суммы используется отдельный оффер Lava.',
         ).format(
             name=display_name,

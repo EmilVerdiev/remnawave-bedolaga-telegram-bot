@@ -1,6 +1,7 @@
 """Покупка подписки по тарифам."""
 
 import html
+import re
 from datetime import UTC, datetime, timedelta
 
 import structlog
@@ -33,6 +34,28 @@ from app.utils.promo_offer import get_user_active_promo_discount_percent
 
 
 logger = structlog.get_logger(__name__)
+
+# Пояснение про лимит трафика на мобильных «белых списках» (мгновенная смена / покупка тарифа)
+CALLBACK_INSTANT_SW_TRAFFIC_WHY = 'instant_sw_traffic_why'
+CALLBACK_BUY_TRAFFIC_WHY = 'buy_traffic_why'
+INSTANT_SWITCH_PAID_TRAFFIC_HELP_TEXT = (
+    'Есть 2 вида обхода блокировок: когда вы включаете «Обход» для домашнего или офисного интернета, '
+    'и когда включают глушилки мобильного интернета и начинают работать «белые списки», '
+    'по которым обычно глушится вообще все 🙂\n\n'
+    'Так вот, трафик по обходу блокировок по Wi-Fi - полностью безлимитный! Ютуб в 4К, 1 Тб трафика '
+    'на рилсах в Инсте, вообще без проблем.\n\n'
+    'А вот если нужно сделать обход «белых списков» на мобильном интернете, там все сложнее и дороже. '
+    'И как раз поэтому трафик уже не безлимитный на базовом тарифе. По умолчанию мы добавляем 100 Гб трафика, '
+    'но при необходимости его можно докупить. Либо и вовсе взять сразу безлимитный ВИП-тариф 😎'
+)
+INSTANT_SWITCH_PAID_TRAFFIC_BUTTON_TEXT = 'А почему есть платный трафик??'
+
+_BEZLIM_PATTERN = re.compile(r'([Бб]езлимит\w*)', re.UNICODE)
+
+
+def _html_bold_bezlimit_words(plain: str) -> str:
+    """Экранирование + слова «безлимит*» жирным (не курсивом)."""
+    return _BEZLIM_PATTERN.sub(r'<b>\1</b>', html.escape(plain))
 
 
 async def _persist_failed_refund(
@@ -112,6 +135,43 @@ def _get_user_period_discount(db_user: User, period_days: int) -> tuple[int, int
     return group_discount, personal_discount, display_combined
 
 
+TELEGRAM_INLINE_BUTTON_TEXT_MAX = 64
+
+
+def _tariff_purchase_price_suffix(tariff: Tariff, db_user: User | None) -> str:
+    """Краткая подпись цены на кнопке выбора тарифа (логика как у старой строки в списке)."""
+    is_daily = getattr(tariff, 'is_daily', False)
+    discount_icon = ''
+    if is_daily:
+        daily_price = getattr(tariff, 'daily_price_kopeks', 0)
+        if db_user:
+            group_pct, offer_pct, daily_discount = _get_user_period_discount(db_user, 1)
+            if daily_discount > 0:
+                daily_price = _apply_promo_discount(daily_price, group_pct, offer_pct)
+                discount_icon = '🔥'
+        return f'🔄 {format_price_kopeks(daily_price, compact=True)}/день{discount_icon}'
+    prices = tariff.period_prices or {}
+    if not prices:
+        return ''
+    min_period = min(prices.keys(), key=int)
+    min_price = prices[min_period]
+    group_pct, offer_pct, discount_percent = 0, 0, 0
+    if db_user:
+        group_pct, offer_pct, discount_percent = _get_user_period_discount(db_user, int(min_period))
+    if discount_percent > 0:
+        min_price = _apply_promo_discount(min_price, group_pct, offer_pct)
+        discount_icon = '🔥'
+    else:
+        discount_icon = ''
+    return f'от {format_price_kopeks(min_price, compact=True)}{discount_icon}'
+
+
+def _truncate_inline_button_caption(text: str, max_len: int = TELEGRAM_INLINE_BUTTON_TEXT_MAX) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + '…'
+
+
 def format_tariffs_list_text(
     tariffs: list[Tariff],
     db_user: User | None = None,
@@ -129,47 +189,11 @@ def format_tariffs_list_text(
     lines.append('')
 
     for tariff in tariffs:
-        # Трафик компактно
-        traffic_gb = tariff.traffic_limit_gb
-        traffic = '∞' if traffic_gb == 0 else f'{traffic_gb} ГБ'
-
-        # Цена
-        is_daily = getattr(tariff, 'is_daily', False)
-        price_text = ''
-        discount_icon = ''
-
-        if is_daily:
-            # Для суточных тарифов показываем цену за день с учётом скидки промогруппы
-            daily_price = getattr(tariff, 'daily_price_kopeks', 0)
-            if db_user:
-                group_pct, offer_pct, daily_discount = _get_user_period_discount(db_user, 1)
-                if daily_discount > 0:
-                    daily_price = _apply_promo_discount(daily_price, group_pct, offer_pct)
-                    discount_icon = '🔥'
-            price_text = f'🔄 {format_price_kopeks(daily_price, compact=True)}/день{discount_icon}'
-        else:
-            # Для периодных тарифов показываем минимальную цену
-            prices = tariff.period_prices or {}
-            if prices:
-                min_period = min(prices.keys(), key=int)
-                min_price = prices[min_period]
-                group_pct, offer_pct, discount_percent = 0, 0, 0
-                if db_user:
-                    group_pct, offer_pct, discount_percent = _get_user_period_discount(db_user, int(min_period))
-                if discount_percent > 0:
-                    min_price = _apply_promo_discount(min_price, group_pct, offer_pct)
-                    discount_icon = '🔥'
-                price_text = f'от {format_price_kopeks(min_price, compact=True)}{discount_icon}'
-
-        # Компактный формат: Название — 250 ГБ / 10 📱 от 179₽🔥
         purchased_mark = ' ✅' if tariff.id in purchased_tariff_ids else ''
-        lines.append(
-            f'<b>{html.escape(tariff.name)}</b>{purchased_mark} — {traffic} / {tariff.device_limit} 📱 {price_text}'
-        )
+        lines.append(f'<b>{html.escape(tariff.name)}</b>{purchased_mark}')
 
-        # Описание тарифа если есть
         if tariff.description:
-            lines.append(f'<i>{html.escape(tariff.description)}</i>')
+            lines.append(_html_bold_bezlimit_words(tariff.description))
 
         lines.append('')
 
@@ -180,19 +204,24 @@ def get_tariffs_keyboard(
     tariffs: list[Tariff],
     language: str,
     purchased_tariff_ids: set[int] | None = None,
+    db_user: User | None = None,
 ) -> InlineKeyboardMarkup:
-    """Создает компактную клавиатуру выбора тарифов (только названия)."""
+    """Клавиатура выбора тарифа: название + цена на кнопке, как на экране мгновенной смены."""
     texts = get_texts(language)
     if purchased_tariff_ids is None:
         purchased_tariff_ids = set()
     buttons = []
 
     for tariff in tariffs:
-        if tariff.id in purchased_tariff_ids:
-            buttons.append([InlineKeyboardButton(text=f'✅ {tariff.name}', callback_data=f'tariff_select:{tariff.id}')])
-        else:
-            buttons.append([InlineKeyboardButton(text=tariff.name, callback_data=f'tariff_select:{tariff.id}')])
+        base = f'✅ {tariff.name}' if tariff.id in purchased_tariff_ids else tariff.name
+        suffix = _tariff_purchase_price_suffix(tariff, db_user) if db_user else ''
+        label = f'{base} · {suffix}' if suffix else base
+        label = _truncate_inline_button_caption(label)
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f'tariff_select:{tariff.id}')])
 
+    buttons.append(
+        [InlineKeyboardButton(text=INSTANT_SWITCH_PAID_TRAFFIC_BUTTON_TEXT, callback_data=CALLBACK_BUY_TRAFFIC_WHY)]
+    )
     buttons.append([InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -305,13 +334,7 @@ def format_tariff_info_for_user(
     """Форматирует информацию о тарифе для пользователя."""
     get_texts(language)
 
-    traffic = format_traffic(tariff.traffic_limit_gb)
-
     text = f"""📦 <b>{html.escape(tariff.name)}</b>
-
-<b>Параметры:</b>
-• Трафик: {traffic}
-• Устройств: {tariff.device_limit}
 """
 
     if tariff.description:
@@ -593,7 +616,8 @@ async def show_tariffs_list(
 
     await callback.message.edit_text(
         tariffs_text,
-        reply_markup=get_tariffs_keyboard(tariffs, db_user.language, purchased_tariff_ids),
+        reply_markup=get_tariffs_keyboard(tariffs, db_user.language, purchased_tariff_ids, db_user),
+        parse_mode='HTML',
     )
 
     await callback.answer()
@@ -3285,21 +3309,10 @@ def format_instant_switch_list_text(
         if tariff.id == current_tariff.id:
             continue
 
-        traffic_gb = tariff.traffic_limit_gb
-        traffic = '∞' if traffic_gb == 0 else f'{traffic_gb} ГБ'
-
-        # Рассчитываем стоимость переключения
-        cost, is_upgrade = _calculate_instant_switch_cost(current_tariff, tariff, remaining_days, db_user)
-
-        if is_upgrade:
-            cost_text = f'⬆️ +{format_price_kopeks(cost, compact=True)}'
-        else:
-            cost_text = '⬇️ Бесплатно'
-
-        lines.append(f'<b>{html.escape(tariff.name)}</b> — {traffic} / {tariff.device_limit} 📱 {cost_text}')
+        lines.append(f'<b>{html.escape(tariff.name)}</b>')
 
         if tariff.description:
-            lines.append(f'<i>{html.escape(tariff.description)}</i>')
+            lines.append(_html_bold_bezlimit_words(tariff.description))
 
         lines.append('')
 
@@ -3331,6 +3344,9 @@ def get_instant_switch_keyboard(
 
         buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f'instant_sw_preview:{tariff.id}')])
 
+    buttons.append(
+        [InlineKeyboardButton(text=INSTANT_SWITCH_PAID_TRAFFIC_BUTTON_TEXT, callback_data=CALLBACK_INSTANT_SW_TRAFFIC_WHY)]
+    )
     buttons.append([InlineKeyboardButton(text=texts.BACK, callback_data='menu_subscription')])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -3451,6 +3467,31 @@ async def show_instant_switch_list(
         active_subscription_id=subscription.id,
     )
     await callback.answer()
+
+
+@error_handler
+async def show_paid_traffic_help(
+    callback: types.CallbackQuery,
+    db_user: User,
+    db: AsyncSession,
+    state: FSMContext,
+):
+    """Текст про платный/лимитированный трафик (Wi‑Fi vs мобильные «белые списки»)."""
+    texts = get_texts(db_user.language)
+    await callback.answer()
+    back_cd = (
+        'buy_subscription_tariffs'
+        if (callback.data or '') == CALLBACK_BUY_TRAFFIC_WHY
+        else 'instant_switch'
+    )
+    back_kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=texts.BACK, callback_data=back_cd)]],
+    )
+    await callback.message.edit_text(
+        _html_bold_bezlimit_words(INSTANT_SWITCH_PAID_TRAFFIC_HELP_TEXT),
+        reply_markup=back_kb,
+        parse_mode='HTML',
+    )
 
 
 @error_handler
@@ -4100,5 +4141,9 @@ def register_tariff_purchase_handlers(dp: Dispatcher):
 
     # Мгновенное переключение тарифов (без выбора периода)
     dp.callback_query.register(show_instant_switch_list, F.data == 'instant_switch')
+    dp.callback_query.register(
+        show_paid_traffic_help,
+        F.data.in_([CALLBACK_INSTANT_SW_TRAFFIC_WHY, CALLBACK_BUY_TRAFFIC_WHY]),
+    )
     dp.callback_query.register(preview_instant_switch, F.data.startswith('instant_sw_preview:'))
     dp.callback_query.register(confirm_instant_switch, F.data.startswith('instant_sw_confirm:'))

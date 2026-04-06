@@ -790,6 +790,7 @@ class PaymentService(
                 user_id=None,
                 amount_kopeks=amount_kopeks,
                 description=description,
+                lava_payment_method_type='CARD',
             )
             if result:
                 await _patch_guest_metadata(result['local_payment_id'], 'lava')

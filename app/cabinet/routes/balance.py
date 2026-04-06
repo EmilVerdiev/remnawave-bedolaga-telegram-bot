@@ -810,6 +810,7 @@ async def create_topup(
                 ),
                 email=getattr(user, 'email', None),
                 language=getattr(user, 'language', None) or settings.DEFAULT_LANGUAGE,
+                lava_payment_method_type='CARD',
             )
 
             if result and result.get('payment_url'):

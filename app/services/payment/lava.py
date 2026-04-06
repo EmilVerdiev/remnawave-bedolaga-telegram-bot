@@ -185,7 +185,9 @@ class LavaPaymentMixin:
             body['buyerLanguage'] = settings.LAVA_BUYER_LANGUAGE
         if settings.LAVA_PAYMENT_PROVIDER:
             body['paymentProvider'] = settings.LAVA_PAYMENT_PROVIDER
-        effective_method_type = (lava_payment_method_type or settings.LAVA_PAYMENT_METHOD_TYPE or '').strip().upper()
+        effective_method_type = (
+            lava_payment_method_type or settings.LAVA_PAYMENT_METHOD_TYPE or 'CARD'
+        ).strip().upper()
         if effective_method_type:
             body['paymentMethod'] = effective_method_type
 

@@ -84,7 +84,10 @@ class TariffDetailResponse(BaseModel):
     is_trial_available: bool
     allow_traffic_topup: bool = True
     traffic_topup_enabled: bool = False
-    traffic_topup_packages: dict[str, int] = Field(default_factory=dict)
+    traffic_topup_packages: dict[str, int] = Field(
+        default_factory=dict,
+        description='Докупка трафика: ключ — ГБ строкой, значение — цена в копейках. Ключ "0" = пакет «безлимит».',
+    )
     max_topup_traffic_gb: int = 0
     traffic_limit_gb: int
     device_limit: int
@@ -143,7 +146,10 @@ class TariffCreateRequest(BaseModel):
     is_active: bool = True
     allow_traffic_topup: bool = True
     traffic_topup_enabled: bool = False
-    traffic_topup_packages: dict[str, int] = Field(default_factory=dict)
+    traffic_topup_packages: dict[str, int] = Field(
+        default_factory=dict,
+        description='ГБ (строка) → цена в копейках. "0" = безлимит, напр. {"10": 9000, "0": 20000}',
+    )
     max_topup_traffic_gb: int = Field(0, ge=0)
     traffic_limit_gb: int = Field(0, ge=0, description='0 = unlimited')
     device_limit: int = Field(1, ge=1)
@@ -185,7 +191,10 @@ class TariffUpdateRequest(BaseModel):
     is_active: bool | None = None
     allow_traffic_topup: bool | None = None
     traffic_topup_enabled: bool | None = None
-    traffic_topup_packages: dict[str, int] | None = None
+    traffic_topup_packages: dict[str, int] | None = Field(
+        None,
+        description='ГБ (строка) → копейки; "0" = безлимит',
+    )
     max_topup_traffic_gb: int | None = Field(None, ge=0)
     traffic_limit_gb: int | None = Field(None, ge=0)
     device_limit: int | None = Field(None, ge=1)

@@ -24,7 +24,14 @@ from app.database.crud.user import (
     get_user_by_telegram_id,
 )
 from app.database.crud.user_message import get_random_active_message
-from app.database.models import GuestPurchase, GuestPurchaseStatus, PinnedMessage, SubscriptionStatus, UserStatus
+from app.database.models import (
+    GuestPurchase,
+    GuestPurchaseStatus,
+    PinnedMessage,
+    SubscriptionStatus,
+    User,
+    UserStatus,
+)
 from app.keyboards.inline import (
     get_back_keyboard,
     get_language_selection_keyboard,
@@ -32,6 +39,7 @@ from app.keyboards.inline import (
     get_post_registration_keyboard,
     get_privacy_policy_keyboard,
     get_rules_keyboard,
+    get_trial_keyboard,
 )
 from app.localization.loader import DEFAULT_LANGUAGE
 from app.localization.texts import get_privacy_policy, get_rules, get_texts
@@ -63,6 +71,115 @@ from app.utils.user_utils import generate_unique_referral_code
 
 
 logger = structlog.get_logger(__name__)
+
+# Тексты пре-экрана перед правилами (только при REGISTRATION_QUICK_START)
+REGISTRATION_QUICK_START_PITCH_PART0 = (
+    'Если ты (как и мы), очень устал заебался от бесконечных блокировок мобильного интернета в РФ, '
+    '«белых списков», «Обходыч» решит все эти проблемы!\n\n'
+    'Прямо сейчас у тебя не работает:\n\n'
+    '❌ Интернет с телефона – белые списки!\n'
+    '❌ Telegram – заблокирован\n'
+    '❌ YouTube – заблокирован\n'
+    '❌ Instagram – заблокирован\n'
+    '❌ WhatsApp – заблокирован\n\n'
+    'Классно, да? (нет). И чем же наш «Обходыч» лучше всех остальных?'
+)
+
+REGISTRATION_QUICK_START_PITCH_PART1 = (
+    '✅ «Обходыч» работает даже в тех регионах РФ 🇷🇺, где мобильный интернет полностью заблокирован '
+    'и отсутствует как явление последние пол года / год! Ни один другой сервис таким похвастаться не может.\n\n'
+    '🚀 Высочайшая скорость подключения и очень низкий пинг. У тебя никогда не будет тупить ТГ, инста, '
+    'и ролики на Ютюбе будут грузиться даже в 4К 🙂\n\n'
+    '👻 С «Обходычем» работают все российские приложения, которые «не видят», что ты используешь наш сервис!\n\n'
+    '📱💻 📺 Подходит для смартфонов, для ПК / MacOS, и для телевизоров на базе Android. '
+    'В подписку включено сразу 5 устройств.\n\n'
+    '✅ Очень простая установка в пару кликов, где требуется просто «скопировать и вставить» 1 ссылку.\n\n'
+    '💬 Отзывчивая тех. поддержка, которая поможет и проконсультирует в случае возникновения '
+    'каких-либо проблем или вопросов.\n\n'
+    '💰Ну и не будем забывать, про нашу прекрасную реферальную программу 😉'
+)
+
+REGISTRATION_QUICK_START_PITCH_PART2 = (
+    '👉 Жми на кнопку ниже и оформляй подписку! И ты наконец-то сможешь пользоваться ТОЛЬКО ОДНИМ сервисом '
+    'для обхода блокировок, вместо вереницы постоянно отлетающих «аналогичных» сервисов 😎'
+)
+
+QUICK_START_ACTIVATE_CALLBACK = 'quick_start_activate_bypass'
+
+
+async def _send_registration_quick_start_pitch(bot: Bot, chat_id: int, state: FSMContext) -> bool:
+    """При REGISTRATION_QUICK_START: вступление, питч и сообщение с кнопкой до правил. True — правила отправляет callback."""
+    if not getattr(settings, 'REGISTRATION_QUICK_START', False):
+        return False
+    try:
+        await bot.send_message(chat_id, REGISTRATION_QUICK_START_PITCH_PART0)
+        await bot.send_message(chat_id, REGISTRATION_QUICK_START_PITCH_PART1)
+        await bot.send_message(
+            chat_id,
+            REGISTRATION_QUICK_START_PITCH_PART2,
+            reply_markup=types.InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        types.InlineKeyboardButton(
+                            text='Активировать обход!',
+                            callback_data=QUICK_START_ACTIVATE_CALLBACK,
+                        ),
+                    ],
+                ],
+            ),
+        )
+    except TelegramForbiddenError:
+        logger.warning('⚠️ QUICK_START pitch: пользователь заблокировал бота', chat_id=chat_id)
+        return True
+    except Exception as e:
+        logger.error('Ошибка отправки QUICK_START pitch', error=e)
+        return False
+
+    await state.set_state(RegistrationStates.waiting_for_quick_start_activate)
+    logger.info('📢 QUICK_START: пре-правила питч отправлен', chat_id=chat_id)
+    return True
+
+
+def _resolve_registration_language_from_telegram(telegram_language_code: str | None) -> str:
+    """Язык интерфейса при быстрой регистрации: из Telegram, иначе DEFAULT_LANGUAGE."""
+    normalized_map = {
+        lang.strip().lower(): lang.strip().lower()
+        for lang in settings.get_available_languages()
+        if isinstance(lang, str) and lang.strip()
+    }
+    if telegram_language_code:
+        base = telegram_language_code.split('-')[0].lower()
+        if base in normalized_map:
+            return base
+    default_lang = settings.DEFAULT_LANGUAGE or DEFAULT_LANGUAGE
+    if isinstance(default_lang, str):
+        return default_lang.split('-')[0].lower()
+    return DEFAULT_LANGUAGE
+
+
+async def _maybe_send_quick_start_trial_offer(bot: Bot, chat_id: int, user: User, db: AsyncSession) -> None:
+    """После регистрации с REGISTRATION_QUICK_START — второе сообщение с экраном триала (как menu_trial)."""
+    if not getattr(settings, 'REGISTRATION_QUICK_START', False):
+        return
+    if settings.TRIAL_DURATION_DAYS <= 0:
+        return
+    if settings.is_trial_disabled_for_user(getattr(user, 'auth_type', 'telegram')):
+        return
+
+    from app.handlers.subscription import purchase as subscription_purchase
+
+    if not subscription_purchase.is_user_eligible_for_trial_offer(user):
+        return
+    try:
+        trial_text = await subscription_purchase.compose_trial_offer_text(user, db)
+        await bot.send_message(
+            chat_id,
+            trial_text,
+            reply_markup=get_trial_keyboard(user.language),
+            parse_mode='HTML',
+        )
+    except Exception as e:
+        logger.error('Не удалось отправить экран триала после быстрой регистрации', error=e)
 
 
 async def _activate_pending_gift_after_registration(
@@ -422,6 +539,7 @@ async def handle_potential_referral_code(message: types.Message, state: FSMConte
 
     if current_state not in [
         RegistrationStates.waiting_for_rules_accept.state,
+        RegistrationStates.waiting_for_quick_start_activate.state,
         RegistrationStates.waiting_for_privacy_policy_accept.state,
         RegistrationStates.waiting_for_referral_code.state,
         None,
@@ -599,6 +717,9 @@ async def _continue_registration_after_language(
             except Exception as error:
                 logger.error('Ошибка при показе вопроса о реферальном коде после выбора языка', error=error)
                 await _complete_registration_wrapper()
+        return
+
+    if await _send_registration_quick_start_pitch(target_message.bot, target_message.chat.id, state):
         return
 
     rules_text = await get_rules(language)
@@ -992,22 +1113,30 @@ async def cmd_start(message: types.Message, state: FSMContext, db: AsyncSession,
 
     data = await state.get_data() or {}
     if not data.get('language'):
-        if settings.is_language_selection_enabled():
+        if getattr(settings, 'REGISTRATION_QUICK_START', False):
+            data['language'] = _resolve_registration_language_from_telegram(message.from_user.language_code)
+            await state.set_data(data)
+            logger.info(
+                '🌐 REGISTRATION_QUICK_START: язык из Telegram/дефолт',
+                language=data['language'],
+            )
+        elif settings.is_language_selection_enabled():
             await _prompt_language_selection(message, state)
             return
 
-        default_language = (
-            (settings.DEFAULT_LANGUAGE or DEFAULT_LANGUAGE)
-            if isinstance(settings.DEFAULT_LANGUAGE, str)
-            else DEFAULT_LANGUAGE
-        )
-        normalized_default = default_language.split('-')[0].lower()
-        data['language'] = normalized_default
-        await state.set_data(data)
-        logger.info(
-            "🌐 LANGUAGE: выбор языка отключен, устанавливаем язык по умолчанию ''",
-            normalized_default=normalized_default,
-        )
+        else:
+            default_language = (
+                (settings.DEFAULT_LANGUAGE or DEFAULT_LANGUAGE)
+                if isinstance(settings.DEFAULT_LANGUAGE, str)
+                else DEFAULT_LANGUAGE
+            )
+            normalized_default = default_language.split('-')[0].lower()
+            data['language'] = normalized_default
+            await state.set_data(data)
+            logger.info(
+                "🌐 LANGUAGE: выбор языка отключен, устанавливаем язык по умолчанию ''",
+                normalized_default=normalized_default,
+            )
 
     await _continue_registration_after_language(
         message=message,
@@ -1158,6 +1287,27 @@ async def _show_privacy_policy_after_rules(
             return False
 
 
+async def process_quick_start_activate(callback: types.CallbackQuery, state: FSMContext, db: AsyncSession):
+    """Кнопка «Активировать обход!» — показ правил (шаг после пре-экрана QUICK_START)."""
+    await callback.answer()
+    data = await state.get_data() or {}
+    language = data.get('language', DEFAULT_LANGUAGE)
+    rules_text = await get_rules(language)
+    try:
+        await callback.message.answer(rules_text, reply_markup=get_rules_keyboard(language))
+    except TelegramForbiddenError:
+        logger.warning(
+            '⚠️ QUICK_START: пользователь заблокировал бота при отправке правил',
+            from_user_id=callback.from_user.id,
+        )
+        return
+    except Exception as e:
+        logger.error('Ошибка отправки правил после QUICK_START pitch', error=e)
+        return
+    await state.set_state(RegistrationStates.waiting_for_rules_accept)
+    logger.info('📋 QUICK_START: правила отправлены после кнопки активации', from_user_id=callback.from_user.id)
+
+
 async def _continue_registration_after_rules(
     callback: types.CallbackQuery,
     state: FSMContext,
@@ -1169,6 +1319,16 @@ async def _continue_registration_after_rules(
     """
     data = await state.get_data() or {}
     texts = get_texts(language)
+
+    if getattr(settings, 'REGISTRATION_QUICK_START', False):
+        if data.get('referral_code'):
+            referrer = await get_user_by_referral_code(db, data['referral_code'])
+            if referrer:
+                data['referrer_id'] = referrer.id
+                await state.set_data(data)
+                logger.info('✅ Реферер найден (quick start)', referrer_id=referrer.id)
+        await complete_registration_from_callback(callback, state, db)
+        return
 
     if data.get('referral_code'):
         logger.info('🎫 Найден реферальный код из deep link', data=data['referral_code'])
@@ -1308,7 +1468,15 @@ async def process_privacy_policy_accept(callback: types.CallbackQuery, state: FS
                 except Exception:
                     pass
 
-            if data.get('referral_code'):
+            if getattr(settings, 'REGISTRATION_QUICK_START', False):
+                if data.get('referral_code'):
+                    referrer = await get_user_by_referral_code(db, data['referral_code'])
+                    if referrer:
+                        data['referrer_id'] = referrer.id
+                        await state.set_data(data)
+                        logger.info('✅ Реферер найден (quick start, privacy)', referrer_id=referrer.id)
+                await complete_registration_from_callback(callback, state, db)
+            elif data.get('referral_code'):
                 logger.info('🎫 Найден реферальный код из deep link', data=data['referral_code'])
 
                 referrer = await get_user_by_referral_code(db, data['referral_code'])
@@ -1709,13 +1877,22 @@ async def complete_registration_from_callback(callback: types.CallbackQuery, sta
     offer_text = await get_welcome_text_for_user(db, callback.from_user)
     pinned_message = await get_active_pinned_message(db)
 
+    _welcome_subs = getattr(user, 'subscriptions', None) or []
+    _welcome_has_sub = any(s.is_active for s in _welcome_subs)
+    if _welcome_has_sub:
+        _welcome_kb = get_back_keyboard(user.language)
+    elif getattr(settings, 'REGISTRATION_QUICK_START', False):
+        _welcome_kb = get_back_keyboard(user.language)
+    else:
+        _welcome_kb = get_post_registration_keyboard(user.language)
+
     if offer_text:
         try:
             if pinned_message and pinned_message.send_before_menu:
                 await _send_pinned_message(callback.bot, db, user, pinned_message)
             await callback.message.answer(
                 offer_text,
-                reply_markup=get_post_registration_keyboard(user.language),
+                reply_markup=_welcome_kb,
             )
             logger.info('✅ Приветственное сообщение отправлено пользователю', telegram_id=user.telegram_id)
             if pinned_message and not pinned_message.send_before_menu:
@@ -1726,7 +1903,7 @@ async def complete_registration_from_callback(callback: types.CallbackQuery, sta
                 try:
                     await callback.message.answer(
                         offer_text,
-                        reply_markup=get_post_registration_keyboard(user.language),
+                        reply_markup=_welcome_kb,
                         parse_mode=None,
                     )
                     if pinned_message and not pinned_message.send_before_menu:
@@ -1789,6 +1966,8 @@ async def complete_registration_from_callback(callback: types.CallbackQuery, sta
                     'Добро пожаловать, {user_name}!',
                 ).format(user_name=html.escape(user.full_name or ''))
             )
+
+    await _maybe_send_quick_start_trial_offer(callback.bot, callback.from_user.id, user, db)
 
     logger.info('✅ Регистрация завершена для пользователя', telegram_id=user.telegram_id)
 
@@ -2057,10 +2236,12 @@ async def complete_registration(message: types.Message, state: FSMContext, db: A
 
     if offer_text:
         try:
-            # Если у пользователя уже есть подписка (например, от промокода), не предлагаем триал
+            # Если у пользователя уже есть подписка (например, от промокода), не дублируем CTA триала
             _subs = getattr(user, 'subscriptions', None) or []
             user_has_subscription = any(s.is_active for s in _subs)
             if user_has_subscription:
+                keyboard = get_back_keyboard(user.language, callback_data='back_to_menu')
+            elif getattr(settings, 'REGISTRATION_QUICK_START', False):
                 keyboard = get_back_keyboard(user.language, callback_data='back_to_menu')
             else:
                 keyboard = get_post_registration_keyboard(user.language)
@@ -2143,6 +2324,8 @@ async def complete_registration(message: types.Message, state: FSMContext, db: A
                     'Добро пожаловать, {user_name}!',
                 ).format(user_name=html.escape(user.full_name or ''))
             )
+
+    await _maybe_send_quick_start_trial_offer(message.bot, message.from_user.id, user, db)
 
     logger.info('✅ Регистрация завершена для пользователя', telegram_id=user.telegram_id)
 
@@ -2691,6 +2874,9 @@ async def required_sub_channel_check(
                     )
                     await state.set_state(RegistrationStates.waiting_for_referral_code)
             else:
+                if await _send_registration_quick_start_pitch(bot, query.from_user.id, state):
+                    return
+
                 rules_text = await get_rules(language)
 
                 if settings.ENABLE_LOGO_MODE and not caption_exceeds_telegram_limit(rules_text):
@@ -2771,6 +2957,13 @@ def register_handlers(dp: Dispatcher):
     logger.debug('Зарегистрирован cmd_start')
 
     dp.callback_query.register(
+        process_quick_start_activate,
+        F.data == QUICK_START_ACTIVATE_CALLBACK,
+        StateFilter(RegistrationStates.waiting_for_quick_start_activate),
+    )
+    logger.debug('Зарегистрирован process_quick_start_activate')
+
+    dp.callback_query.register(
         process_rules_accept,
         F.data.in_(['rules_accept', 'rules_decline']),
         StateFilter(RegistrationStates.waiting_for_rules_accept),
@@ -2801,7 +2994,11 @@ def register_handlers(dp: Dispatcher):
 
     dp.message.register(
         handle_potential_referral_code,
-        StateFilter(RegistrationStates.waiting_for_rules_accept, RegistrationStates.waiting_for_referral_code),
+        StateFilter(
+            RegistrationStates.waiting_for_rules_accept,
+            RegistrationStates.waiting_for_quick_start_activate,
+            RegistrationStates.waiting_for_referral_code,
+        ),
     )
     logger.debug('Зарегистрирован handle_potential_referral_code')
 

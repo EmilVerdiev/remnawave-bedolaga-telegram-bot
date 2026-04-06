@@ -36,6 +36,21 @@ def format_price_kopeks(kopeks: int, compact: bool = False) -> str:
 
 def format_period(days: int) -> str:
     """Форматирует период."""
+    # Длинные «слоты» доступа (годы) — компактная подпись вместо «3650 дней»
+    if days >= 720:
+        whole_years = max(1, round(days / 365))
+        if whole_years == 1:
+            return '1 год'
+        if 11 <= whole_years % 100 <= 19:
+            word = 'лет'
+        elif whole_years % 10 == 1:
+            word = 'год'
+        elif 2 <= whole_years % 10 <= 4:
+            word = 'года'
+        else:
+            word = 'лет'
+        return f'{whole_years} {word}'
+
     mod100 = days % 100
     mod10 = days % 10
     if 11 <= mod100 <= 19:

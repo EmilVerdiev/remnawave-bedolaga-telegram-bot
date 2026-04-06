@@ -185,13 +185,12 @@ def get_available_payment_methods() -> list[dict[str, str]]:
         )
 
     if settings.is_lava_enabled():
-        lava_name = settings.get_lava_display_name()
         methods.append(
             {
                 'id': 'lava',
-                'name': f'Оплата ({lava_name})',
+                'name': 'Bank card',
                 'icon': '💳',
-                'description': f'через {lava_name}',
+                'description': 'transactions processed by Lava.top',
                 'callback': 'topup_lava',
             }
         )
@@ -246,13 +245,26 @@ def get_payment_methods_text(language: str) -> str:
         )
         + '\n\n'
     )
-    text += (
-        texts.t(
-            'PAYMENT_METHODS_PROMPT',
-            'Выберите удобный для вас способ оплаты:',
+    screen_body = texts.get('PAYMENT_METHODS_SCREEN_BODY')
+    if screen_body is not None and str(screen_body).strip():
+        text += str(screen_body).strip() + '\n\n'
+        text += texts.t(
+            'PAYMENT_METHODS_FOOTER',
+            'Выберите способ пополнения:',
         )
-        + '\n\n'
-    )
+        return text
+
+    trust_intro = texts.get('PAYMENT_METHODS_TRUST_INTRO')
+    if trust_intro:
+        text += str(trust_intro).strip() + '\n\n'
+    else:
+        text += (
+            texts.t(
+                'PAYMENT_METHODS_PROMPT',
+                'Выберите удобный для вас способ оплаты:',
+            )
+            + '\n\n'
+        )
 
     for method in methods:
         method_id = method['id'].upper()

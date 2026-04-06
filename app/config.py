@@ -652,9 +652,12 @@ class Settings(BaseSettings):
     LOGO_FILE: str = 'vpn_logo.png'
     SKIP_RULES_ACCEPT: bool = False
     SKIP_REFERRAL_CODE: bool = False
+    # Упрощённая регистрация: язык из Telegram, без шага реферала/промокода после правил,
+    # после регистрации сразу сообщение с предложением триала (как в menu_trial).
+    REGISTRATION_QUICK_START: bool = False
 
     DEFAULT_LANGUAGE: str = 'ru'
-    AVAILABLE_LANGUAGES: str = 'ru,en,ua,zh,fa'
+    AVAILABLE_LANGUAGES: str = 'ru,en,zh,fa'
     LANGUAGE_SELECTION_ENABLED: bool = True
 
     # Округление цен при отображении (≤50 коп вниз, >50 коп вверх)
@@ -1354,7 +1357,7 @@ class Settings(BaseSettings):
         return bool(value)
 
     def get_available_languages(self) -> list[str]:
-        defaults = ['ru', 'en', 'ua', 'zh', 'fa']
+        defaults = ['ru', 'en', 'zh', 'fa']
 
         try:
             langs = self.AVAILABLE_LANGUAGES
