@@ -1,9 +1,11 @@
 import asyncio
 import html
+from io import BytesIO
 from datetime import UTC, datetime, timedelta
 
 import structlog
 from aiogram import Dispatcher, F, types
+from aiogram.types import BufferedInputFile
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import and_, func, or_, select
@@ -812,6 +814,7 @@ async def handle_media_selection(callback: types.CallbackQuery, db_user: User, s
         'photo': '📷 Отправьте фотографию для рассылки:',
         'video': '🎥 Отправьте видео для рассылки:',
         'document': '📄 Отправьте документ для рассылки:',
+        'voice': '🎤 Отправьте голосовое сообщение для рассылки:',
     }
 
     await state.update_data(media_type=media_type, waiting_for_media=True)
@@ -856,6 +859,30 @@ async def process_broadcast_media(message: types.Message, db_user: User, state: 
     media_file_id = None
     media_type = None
 
+    async def _normalize_voice_file_id(source_file_id: str, fallback_name: str = 'voice.ogg') -> str:
+        # Re-upload as voice once to force Telegram to return a true voice file_id.
+        tg_file = await message.bot.get_file(source_file_id)
+        file_stream = await message.bot.download_file(tg_file.file_path)
+        if hasattr(file_stream, 'seek'):
+            file_stream.seek(0)
+        file_bytes = file_stream.read()
+        if hasattr(file_stream, 'close'):
+            file_stream.close()
+
+        probe_voice = await message.bot.send_voice(
+            chat_id=message.chat.id,
+            voice=BufferedInputFile(file=file_bytes, filename=fallback_name),
+            caption='🔄 Обрабатываю голосовое для рассылки...',
+        )
+        try:
+            await probe_voice.delete()
+        except Exception:
+            pass
+
+        if not probe_voice.voice:
+            raise ValueError('Не удалось преобразовать файл в voice-note')
+        return probe_voice.voice.file_id
+
     if message.photo and expected_type == 'photo':
         media_file_id = message.photo[-1].file_id
         media_type = 'photo'
@@ -865,6 +892,22 @@ async def process_broadcast_media(message: types.Message, db_user: User, state: 
     elif message.document and expected_type == 'document':
         media_file_id = message.document.file_id
         media_type = 'document'
+    elif message.audio and expected_type == 'document':
+        # Telegram clients often send mp3 as `audio` instead of `document`.
+        # Treat it as audio media for broadcasting.
+        media_file_id = message.audio.file_id
+        media_type = 'audio'
+    elif message.voice and expected_type == 'voice':
+        media_file_id = message.voice.file_id
+        media_type = 'voice'
+    elif message.audio and expected_type == 'voice':
+        media_file_id = await _normalize_voice_file_id(message.audio.file_id, message.audio.file_name or 'voice.ogg')
+        media_type = 'voice'
+    elif message.document and expected_type == 'voice':
+        media_file_id = await _normalize_voice_file_id(
+            message.document.file_id, message.document.file_name or 'voice.ogg'
+        )
+        media_type = 'voice'
     else:
         await message.answer(f'❌ Пожалуйста, отправьте {expected_type} как указано в инструкции.')
         return
@@ -1074,7 +1117,13 @@ async def confirm_button_selection(callback: types.CallbackQuery, db_user: User,
 
     media_info = ''
     if has_media:
-        media_type_names = {'photo': 'Фотография', 'video': 'Видео', 'document': 'Документ'}
+        media_type_names = {
+            'photo': 'Фотография',
+            'video': 'Видео',
+            'document': 'Документ',
+            'audio': 'Аудио',
+            'voice': 'Голосовое',
+        }
         media_info = f'\n🖼️ <b>Медиафайл:</b> {media_type_names.get(media_type, media_type)}'
 
     ordered_keys = [button_key for row in BUTTON_ROWS for button_key in row]
@@ -1268,12 +1317,16 @@ async def confirm_broadcast(callback: types.CallbackQuery, db_user: User, state:
                         'photo': callback.bot.send_photo,
                         'video': callback.bot.send_video,
                         'document': callback.bot.send_document,
+                        'audio': callback.bot.send_audio,
+                        'voice': callback.bot.send_voice,
                     }.get(media_type)
                     if send_method:
                         media_kwarg = {
                             'photo': 'photo',
                             'video': 'video',
                             'document': 'document',
+                            'audio': 'audio',
+                            'voice': 'voice',
                         }[media_type]
                         # Telegram ограничивает caption до 1024 символов
                         if len(message_text) <= 1024:

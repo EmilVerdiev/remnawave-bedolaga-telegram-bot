@@ -2294,6 +2294,12 @@ def get_broadcast_media_keyboard(language: str = 'ru') -> InlineKeyboardMarkup:
                     callback_data='add_media_document',
                 ),
                 InlineKeyboardButton(
+                    text=_t(texts, 'ADMIN_BROADCAST_ADD_VOICE', '🎤 Добавить голосовое'),
+                    callback_data='add_media_voice',
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text=_t(texts, 'ADMIN_BROADCAST_SKIP_MEDIA', '⏭️ Пропустить медиа'), callback_data='skip_media'
                 ),
             ],

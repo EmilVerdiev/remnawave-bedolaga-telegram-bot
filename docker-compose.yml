@@ -78,6 +78,9 @@ services:
       - ./vpn_logo.png:/app/vpn_logo.png:ro
     ports:
       - '${WEB_API_PORT:-8080}:8080'
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     networks:
       - bot_network
     healthcheck:

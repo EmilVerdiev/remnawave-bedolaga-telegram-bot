@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 
-VALID_MEDIA_TYPES = {'photo', 'video', 'document'}
+VALID_MEDIA_TYPES = {'photo', 'video', 'document', 'audio', 'voice'}
 
 # =========================================================================
 # Telegram rate limits: ~30 msg/sec для бота.
@@ -389,6 +389,8 @@ class BroadcastService:
                 'photo': ('photo', self._bot.send_photo),
                 'video': ('video', self._bot.send_video),
                 'document': ('document', self._bot.send_document),
+                'audio': ('audio', self._bot.send_audio),
+                'voice': ('voice', self._bot.send_voice),
             }
             kwarg_name, send_method = media_methods[config.media.type]
             await send_method(
