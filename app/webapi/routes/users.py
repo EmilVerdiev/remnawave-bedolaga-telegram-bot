@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import structlog
+from aiogram import Bot, types
 from fastapi import APIRouter, Depends, HTTPException, Query, Security, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +29,7 @@ from app.database.crud.user import (
 )
 from app.database.models import PaymentMethod, PromoGroup, Subscription, User, UserStatus
 from app.services.subscription_service import SubscriptionService
+from app.utils.miniapp_buttons import build_miniapp_or_callback_button
 
 from ..dependencies import get_db_session, require_api_token
 from ..schemas.users import (
@@ -42,6 +45,7 @@ from ..schemas.users import (
 
 
 router = APIRouter()
+logger = structlog.get_logger(__name__)
 
 
 def _serialize_promo_group(group: PromoGroup | None) -> PromoGroupSummary | None:
@@ -361,6 +365,36 @@ async def _get_user_by_id_or_telegram_id(db: AsyncSession, user_id: int) -> User
     return user
 
 
+async def _notify_user_about_manual_subscription_issue(user: User) -> None:
+    """Send a one-click message after manual subscription issuing from admin cabinet."""
+    if not user.telegram_id:
+        return
+    try:
+        async with Bot(settings.BOT_TOKEN) as bot:
+            keyboard = types.InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        build_miniapp_or_callback_button(
+                            text='📱 Открыть личный кабинет',
+                            callback_data='menu_subscription',
+                        )
+                    ]
+                ]
+            )
+            await bot.send_message(
+                chat_id=user.telegram_id,
+                text='✅ Подписка активирована.\nОткройте личный кабинет:',
+                reply_markup=keyboard,
+            )
+    except Exception as exc:
+        logger.warning(
+            'Failed to notify user about manual subscription issuing',
+            user_id=user.id,
+            telegram_id=user.telegram_id,
+            error=exc,
+        )
+
+
 @router.post('/{user_id}/subscription', response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def create_user_subscription(
     user_id: int,
@@ -486,6 +520,8 @@ async def create_user_subscription(
 
     # Перезагружаем пользователя с подпиской
     user = await get_user_by_id(db, user.id)
+    if user and not payload.is_trial:
+        await _notify_user_about_manual_subscription_issue(user)
     return _serialize_user(user)
 
 

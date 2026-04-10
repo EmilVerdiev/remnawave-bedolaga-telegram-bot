@@ -734,8 +734,9 @@ def register_balance_handlers(dp: Dispatcher):
 
     dp.callback_query.register(start_severpay_topup, F.data == 'topup_severpay')
 
-    from .lava import start_lava_topup
+    from .lava import regenerate_lava_topup_payment_link, start_lava_topup
 
+    dp.callback_query.register(regenerate_lava_topup_payment_link, F.data.startswith('lt_regen|'))
     dp.callback_query.register(start_lava_topup, F.data == 'topup_lava')
 
     from .mulenpay import check_mulenpay_payment_status

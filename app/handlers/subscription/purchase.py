@@ -7,6 +7,7 @@ from aiogram import Dispatcher, F, types
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InaccessibleMessage, InlineKeyboardButton, InlineKeyboardMarkup
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -17,7 +18,7 @@ from app.database.crud.subscription import (
 )
 from app.database.crud.transaction import create_transaction
 from app.database.crud.user import subtract_user_balance
-from app.database.models import PaymentMethod, Subscription, SubscriptionStatus, TransactionType, User
+from app.database.models import PaymentMethod, Subscription, SubscriptionStatus, Tariff, TransactionType, User
 from app.keyboards.inline import (
     get_back_keyboard,
     get_countries_keyboard,
@@ -27,6 +28,7 @@ from app.keyboards.inline import (
     get_insufficient_balance_keyboard,
     get_insufficient_balance_keyboard_with_cart,
     get_payment_methods_keyboard_with_cart,
+    get_quick_start_compact_keyboard,
     get_subscription_confirm_keyboard,
     get_subscription_confirm_keyboard_with_cart,
     get_subscription_keyboard,
@@ -58,6 +60,110 @@ from app.utils.decorators import error_handler
 
 
 logger = structlog.get_logger(__name__)
+
+TRIAL_ANALOG_TARIFF_NAME = 'Тест-драйв 1 день'
+TRIAL_ANALOG_PERIOD_DAYS = 1
+TRIAL_ANALOG_TRAFFIC_GB = 5
+TRIAL_ANALOG_DEVICE_LIMIT = 2
+TRIAL_ANALOG_FALLBACK_PRICE_KOPEKS = 5000
+
+
+async def _ensure_trial_analog_tariff(db: AsyncSession) -> Tariff:
+    """Создает или обновляет тариф-замену платного триала."""
+    from app.database.crud.tariff import create_tariff, update_tariff
+
+    tariff_price = settings.get_trial_activation_price()
+    if tariff_price <= 0:
+        tariff_price = TRIAL_ANALOG_FALLBACK_PRICE_KOPEKS
+
+    result = await db.execute(select(Tariff).where(Tariff.name == TRIAL_ANALOG_TARIFF_NAME).limit(1))
+    existing_tariff = result.scalar_one_or_none()
+
+    if existing_tariff is None:
+        return await create_tariff(
+            db,
+            name=TRIAL_ANALOG_TARIFF_NAME,
+            description='Тест-драйв: 1 день, 5 ГБ, 2 устройства.',
+            display_order=999,
+            is_active=True,
+            traffic_limit_gb=TRIAL_ANALOG_TRAFFIC_GB,
+            device_limit=TRIAL_ANALOG_DEVICE_LIMIT,
+            period_prices={TRIAL_ANALOG_PERIOD_DAYS: tariff_price},
+            is_trial_available=False,
+            allow_traffic_topup=False,
+            traffic_topup_enabled=False,
+            show_in_gift=False,
+        )
+
+    updated = await update_tariff(
+        db,
+        existing_tariff,
+        description='Тест-драйв: 1 день, 5 ГБ, 2 устройства.',
+        display_order=999,
+        is_active=True,
+        traffic_limit_gb=TRIAL_ANALOG_TRAFFIC_GB,
+        device_limit=TRIAL_ANALOG_DEVICE_LIMIT,
+        period_prices={TRIAL_ANALOG_PERIOD_DAYS: tariff_price},
+        is_trial_available=False,
+        allow_traffic_topup=False,
+        traffic_topup_enabled=False,
+        show_in_gift=False,
+    )
+    return updated
+
+
+async def _show_trial_analog_tariff_offer(callback: types.CallbackQuery, db_user: User, db: AsyncSession) -> bool:
+    """Показывает экран тарифа-замены, если триал отключен."""
+    texts = get_texts(db_user.language)
+
+    if not settings.is_tariffs_mode():
+        return False
+
+    try:
+        tariff = await _ensure_trial_analog_tariff(db)
+    except Exception as error:
+        logger.error('Не удалось создать/обновить тариф-замену триала', error=error)
+        return False
+
+    period_price = int((tariff.period_prices or {}).get(str(TRIAL_ANALOG_PERIOD_DAYS), 0) or 0)
+    if period_price <= 0:
+        period_price = TRIAL_ANALOG_FALLBACK_PRICE_KOPEKS
+
+    from app.utils.formatting import format_period, format_price_kopeks
+
+    message = (
+        f'📦 <b>{html.escape(tariff.name)}</b>\n\n'
+        f'📝 {html.escape(tariff.description or "")}\n\n'
+        f'{texts.t("CHOOSE_PERIOD_PROMPT", "Выберите период подписки:")}'
+    )
+
+    period_button = f'{format_period(TRIAL_ANALOG_PERIOD_DAYS)} — {format_price_kopeks(period_price)}'
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=period_button,
+                    callback_data=f'tariff_confirm:{tariff.id}:{TRIAL_ANALOG_PERIOD_DAYS}',
+                )
+            ],
+            [InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')],
+        ]
+    )
+
+    await callback.message.edit_text(message, reply_markup=keyboard, parse_mode='HTML')
+    return True
+
+
+def _build_quick_start_compact_text_for_subscription(user: User) -> str:
+    username = user.username or user.first_name or user.full_name or 'друг'
+    safe_username = html.escape(username)
+    return (
+        f'Привет, {safe_username}!\n\n'
+        'Если ты хочешь посмотреть, как работает наш сервис «Обходыч», просто нажми на кнопку '
+        '«Активировать тест-драйв», и у тебя на 24 часа будет полный доступ.\n\n'
+        'Либо ты можешь сразу оформить подписку на на месяц, полгода или год ;)'
+    )
 
 
 async def _resolve_subscription(callback, db_user, db, state=None):
@@ -194,6 +300,20 @@ async def show_subscription_info(callback: types.CallbackQuery, db_user: User, d
         return
 
     await db.refresh(db_user)
+    has_active_subscription = any(sub.is_active for sub in (getattr(db_user, 'subscriptions', None) or []))
+    if (
+        getattr(settings, 'REGISTRATION_QUICK_START', False)
+        and not db_user.has_had_paid_subscription
+        and not has_active_subscription
+    ):
+        compact_text = _build_quick_start_compact_text_for_subscription(db_user)
+        await callback.message.edit_text(
+            compact_text,
+            reply_markup=get_quick_start_compact_keyboard(db_user.language),
+            parse_mode=None,
+        )
+        await callback.answer()
+        return
 
     texts = get_texts(db_user.language)
     # Multi-tariff: this branch is only reached in single-tariff mode (multi-tariff
@@ -724,10 +844,12 @@ async def show_trial_offer(callback: types.CallbackQuery, db_user: User, db: Asy
 
     # Проверяем, отключён ли триал для этого типа пользователя
     if settings.is_trial_disabled_for_user(getattr(db_user, 'auth_type', 'telegram')):
-        await callback.message.edit_text(
-            texts.t('TRIAL_DISABLED_FOR_USER_TYPE', 'Пробный период недоступен'),
-            reply_markup=get_back_keyboard(db_user.language),
-        )
+        analog_shown = await _show_trial_analog_tariff_offer(callback, db_user, db)
+        if not analog_shown:
+            await callback.message.edit_text(
+                texts.t('TRIAL_DISABLED_FOR_USER_TYPE', 'Пробный период недоступен'),
+                reply_markup=get_back_keyboard(db_user.language),
+            )
         await callback.answer()
         return
 
@@ -746,7 +868,7 @@ async def show_trial_offer(callback: types.CallbackQuery, db_user: User, db: Asy
 
 
 def _get_trial_payment_keyboard(language: str, can_pay_from_balance: bool = False) -> types.InlineKeyboardMarkup:
-    """Создает клавиатуру с методами оплаты для платного триала."""
+    """Создает компактную клавиатуру оплаты платного триала."""
     texts = get_texts(language)
     keyboard = []
 
@@ -756,46 +878,30 @@ def _get_trial_payment_keyboard(language: str, can_pay_from_balance: bool = Fals
             [types.InlineKeyboardButton(text='✅ Оплатить с баланса', callback_data='trial_pay_with_balance')]
         )
 
-    # Добавляем доступные методы оплаты
-    if settings.TELEGRAM_STARS_ENABLED:
-        keyboard.append([types.InlineKeyboardButton(text='⭐ Telegram Stars', callback_data='trial_payment_stars')])
-
-    if settings.is_yookassa_enabled():
-        yookassa_methods = []
-        if settings.YOOKASSA_SBP_ENABLED:
-            yookassa_methods.append(
-                types.InlineKeyboardButton(text='🏦 YooKassa (СБП)', callback_data='trial_payment_yookassa_sbp')
-            )
-        yookassa_methods.append(
-            types.InlineKeyboardButton(text='💳 YooKassa (Карта)', callback_data='trial_payment_yookassa')
-        )
-        if yookassa_methods:
-            keyboard.append(yookassa_methods)
-
-    if settings.is_cryptobot_enabled():
-        keyboard.append([types.InlineKeyboardButton(text='🪙 CryptoBot', callback_data='trial_payment_cryptobot')])
-
-    if settings.is_heleket_enabled():
-        keyboard.append([types.InlineKeyboardButton(text='🪙 Heleket', callback_data='trial_payment_heleket')])
-
-    if settings.is_mulenpay_enabled():
-        mulenpay_name = settings.get_mulenpay_display_name()
+    # Банковская карта через Lava (как основной карточный способ в этом проекте)
+    if settings.is_lava_enabled():
         keyboard.append(
-            [types.InlineKeyboardButton(text=f'💳 {mulenpay_name}', callback_data='trial_payment_mulenpay')]
+            [
+                types.InlineKeyboardButton(
+                    text=texts.t('PAYMENT_LAVA', '💳 Банковская карта'),
+                    callback_data='trial_payment_lava',
+                )
+            ]
         )
 
-    if settings.is_pal24_enabled():
-        keyboard.append([types.InlineKeyboardButton(text='💳 PayPalych', callback_data='trial_payment_pal24')])
-
-    if settings.is_wata_enabled():
-        keyboard.append([types.InlineKeyboardButton(text='💳 WATA', callback_data='trial_payment_wata')])
-
-    if settings.is_platega_enabled():
-        platega_name = settings.get_platega_display_name()
-        keyboard.append([types.InlineKeyboardButton(text=f'💳 {platega_name}', callback_data='trial_payment_platega')])
+    # Ручная оплата через поддержку
+    if settings.is_support_topup_enabled():
+        keyboard.append(
+            [
+                types.InlineKeyboardButton(
+                    text=texts.t('PAYMENT_VIA_SUPPORT', '🛠️ Через поддержку'),
+                    callback_data='trial_payment_support',
+                )
+            ]
+        )
 
     # Кнопка назад
-    keyboard.append([types.InlineKeyboardButton(text=texts.BACK, callback_data='menu_trial')])
+    keyboard.append([types.InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')])
 
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -824,10 +930,12 @@ async def activate_trial(callback: types.CallbackQuery, db_user: User, db: Async
 
     # Проверяем, отключён ли триал для этого типа пользователя
     if settings.is_trial_disabled_for_user(getattr(db_user, 'auth_type', 'telegram')):
-        await callback.message.edit_text(
-            texts.t('TRIAL_DISABLED_FOR_USER_TYPE', 'Пробный период недоступен'),
-            reply_markup=get_back_keyboard(db_user.language),
-        )
+        analog_shown = await _show_trial_analog_tariff_offer(callback, db_user, db)
+        if not analog_shown:
+            await callback.message.edit_text(
+                texts.t('TRIAL_DISABLED_FOR_USER_TYPE', 'Пробный период недоступен'),
+                reply_markup=get_back_keyboard(db_user.language),
+            )
         await callback.answer()
         return
 
@@ -3580,6 +3688,101 @@ def _build_trial_success_keyboard(texts, subscription_link: str, connect_mode: s
 
 
 @error_handler
+async def handle_trial_lava_new_payment_link(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
+    """Повторно создаёт счёт Lava для ожидающей триальной подписки и обновляет ссылку в сообщении."""
+    from sqlalchemy import select
+
+    from app.services.payment_service import PaymentService
+    from app.services.trial_activation_service import get_trial_activation_charge_amount
+
+    texts = get_texts(db_user.language)
+    trial_price_kopeks = get_trial_activation_charge_amount()
+    if trial_price_kopeks <= 0:
+        await callback.answer('❌ Ошибка: триал бесплатный', show_alert=True)
+        return
+
+    trial_blocked = False
+    if db_user.has_had_paid_subscription:
+        trial_blocked = True
+    elif db_user.subscription:
+        sub = db_user.subscription
+        if not (sub.status == SubscriptionStatus.PENDING.value and sub.is_trial):
+            trial_blocked = True
+
+    if trial_blocked:
+        await callback.message.edit_text(texts.TRIAL_ALREADY_USED, reply_markup=get_back_keyboard(db_user.language))
+        await callback.answer()
+        return
+
+    result = await db.execute(
+        select(Subscription)
+        .where(
+            Subscription.user_id == db_user.id,
+            Subscription.status == SubscriptionStatus.PENDING.value,
+            Subscription.is_trial == True,  # noqa: E712
+        )
+        .order_by(Subscription.created_at.desc())
+        .limit(1)
+    )
+    pending = result.scalar_one_or_none()
+    if not pending:
+        await callback.answer(
+            texts.t(
+                'PAYMENT_NEW_LINK_NO_PENDING',
+                '❌ Нет ожидающего заказа. Откройте оплату триала снова.',
+            ),
+            show_alert=True,
+        )
+        return
+
+    trial_duration = settings.TRIAL_DURATION_DAYS
+    if pending.start_date and pending.end_date:
+        trial_duration = max(1, (pending.end_date - pending.start_date).days)
+
+    payment_service = PaymentService(callback.bot)
+    payment_result = await payment_service.create_lava_payment(
+        db=db,
+        user_id=db_user.id,
+        amount_kopeks=trial_price_kopeks,
+        description=texts.t('PAID_TRIAL_PAYMENT_DESC', 'Пробная подписка на {days} дней').format(
+            days=trial_duration
+        ),
+    )
+
+    if not payment_result or not payment_result.get('payment_url'):
+        await callback.answer('❌ Не удалось создать платеж. Попробуйте позже.', show_alert=True)
+        return
+
+    new_link_caption = texts.t(
+        'PAYMENT_NEW_LINK_BUTTON',
+        '🔄 Новая ссылка на оплату',
+    )
+    trial_pay_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text='💳 Оплатить', url=payment_result['payment_url'])],
+            [InlineKeyboardButton(text=new_link_caption, callback_data='trial_lava_new_link')],
+            [InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')],
+        ]
+    )
+    # Текст экрана не меняется — только клавиатура с новым URL (иначе Telegram: message is not modified).
+    try:
+        await callback.message.edit_reply_markup(reply_markup=trial_pay_keyboard)
+    except TelegramBadRequest as e:
+        if 'message is not modified' in str(e).lower():
+            await callback.answer(
+                texts.t('PAYMENT_NEW_LINK_SAME', 'Уже актуальная ссылка — откройте «Оплатить» выше.'),
+                show_alert=True,
+            )
+            return
+        raise
+
+    await callback.answer(
+        texts.t('PAYMENT_NEW_LINK_READY', '✅ Новая ссылка готова'),
+        show_alert=False,
+    )
+
+
+@error_handler
 async def handle_trial_payment_method(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
     """Обрабатывает выбор метода оплаты для платного триала."""
     from app.services.payment_service import PaymentService
@@ -3738,7 +3941,7 @@ async def handle_trial_payment_method(callback: types.CallbackQuery, db_user: Us
                 reply_markup=InlineKeyboardMarkup(
                     inline_keyboard=[
                         [InlineKeyboardButton(text='💳 Оплатить', url=qr_url)],
-                        [InlineKeyboardButton(text=texts.BACK, callback_data='trial_activate')],
+                        [InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')],
                     ]
                 ),
                 parse_mode='HTML',
@@ -3772,7 +3975,7 @@ async def handle_trial_payment_method(callback: types.CallbackQuery, db_user: Us
                 reply_markup=InlineKeyboardMarkup(
                     inline_keyboard=[
                         [InlineKeyboardButton(text='💳 Оплатить', url=payment_result['confirmation_url'])],
-                        [InlineKeyboardButton(text=texts.BACK, callback_data='trial_activate')],
+                        [InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')],
                     ]
                 ),
                 parse_mode='HTML',
@@ -3835,7 +4038,7 @@ async def handle_trial_payment_method(callback: types.CallbackQuery, db_user: Us
                                 callback_data=f'check_trial_cryptobot_{pending_subscription.id}',
                             )
                         ],
-                        [InlineKeyboardButton(text=texts.BACK, callback_data='trial_activate')],
+                        [InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')],
                     ]
                 ),
                 parse_mode='HTML',
@@ -3873,7 +4076,7 @@ async def handle_trial_payment_method(callback: types.CallbackQuery, db_user: Us
                                 callback_data=f'check_trial_heleket_{pending_subscription.id}',
                             )
                         ],
-                        [InlineKeyboardButton(text=texts.BACK, callback_data='trial_activate')],
+                        [InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')],
                     ]
                 ),
                 parse_mode='HTML',
@@ -3910,7 +4113,7 @@ async def handle_trial_payment_method(callback: types.CallbackQuery, db_user: Us
                                 callback_data=f'check_trial_mulenpay_{pending_subscription.id}',
                             )
                         ],
-                        [InlineKeyboardButton(text=texts.BACK, callback_data='trial_activate')],
+                        [InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')],
                     ]
                 ),
                 parse_mode='HTML',
@@ -3948,7 +4151,7 @@ async def handle_trial_payment_method(callback: types.CallbackQuery, db_user: Us
                                 callback_data=f'check_trial_pal24_{pending_subscription.id}',
                             )
                         ],
-                        [InlineKeyboardButton(text=texts.BACK, callback_data='trial_activate')],
+                        [InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')],
                     ]
                 ),
                 parse_mode='HTML',
@@ -3984,7 +4187,7 @@ async def handle_trial_payment_method(callback: types.CallbackQuery, db_user: Us
                                 callback_data=f'check_trial_wata_{pending_subscription.id}',
                             )
                         ],
-                        [InlineKeyboardButton(text=texts.BACK, callback_data='trial_activate')],
+                        [InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')],
                     ]
                 ),
                 parse_mode='HTML',
@@ -4032,11 +4235,72 @@ async def handle_trial_payment_method(callback: types.CallbackQuery, db_user: Us
                                 callback_data=f'check_trial_platega_{pending_subscription.id}',
                             )
                         ],
-                        [InlineKeyboardButton(text=texts.BACK, callback_data='trial_activate')],
+                        [InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')],
                     ]
                 ),
                 parse_mode='HTML',
             )
+
+        elif payment_method == 'lava':
+            payment_result = await payment_service.create_lava_payment(
+                db=db,
+                user_id=db_user.id,
+                amount_kopeks=trial_price_kopeks,
+                description=texts.t('PAID_TRIAL_PAYMENT_DESC', 'Пробная подписка на {days} дней').format(
+                    days=trial_duration
+                ),
+            )
+
+            if not payment_result or not payment_result.get('payment_url'):
+                await callback.answer('❌ Не удалось создать платеж. Попробуйте позже.', show_alert=True)
+                return
+
+            new_link_caption = texts.t(
+                'PAYMENT_NEW_LINK_BUTTON',
+                '🔄 Новая ссылка на оплату',
+            )
+            await callback.message.edit_text(
+                texts.t(
+                    'PAID_TRIAL_LAVA',
+                    '💳 <b>Оплата банковской картой</b>\n\n'
+                    'Нажмите кнопку ниже для перехода к оплате.\n\n'
+                    '💰 Сумма: {amount}',
+                ).format(amount=settings.format_price(trial_price_kopeks)),
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text='💳 Оплатить', url=payment_result['payment_url'])],
+                        [InlineKeyboardButton(text=new_link_caption, callback_data='trial_lava_new_link')],
+                        [InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')],
+                    ]
+                ),
+                parse_mode='HTML',
+            )
+
+        elif payment_method == 'support':
+            support_url = settings.get_support_contact_url()
+            if support_url:
+                await callback.message.edit_text(
+                    texts.t(
+                        'TRIAL_SUPPORT_PAYMENT_INFO',
+                        '🛠️ Для оплаты через поддержку напишите нам.\n\n'
+                        '💰 Сумма: {amount}',
+                    ).format(amount=settings.format_price(trial_price_kopeks)),
+                    reply_markup=InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text=texts.t('PAYMENT_VIA_SUPPORT', '🛠️ Через поддержку'),
+                                    url=support_url,
+                                )
+                            ],
+                            [InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu')],
+                        ]
+                    ),
+                    parse_mode='HTML',
+                )
+            else:
+                await callback.answer('❌ Поддержка не настроена', show_alert=True)
+                return
 
         else:
             await callback.answer(f'❌ Неизвестный метод оплаты: {payment_method}', show_alert=True)
@@ -4087,6 +4351,8 @@ def register_handlers(dp: Dispatcher):
 
     # Хендлеры платного триала
     dp.callback_query.register(handle_trial_pay_with_balance, F.data == 'trial_pay_with_balance')
+
+    dp.callback_query.register(handle_trial_lava_new_payment_link, F.data == 'trial_lava_new_link')
 
     dp.callback_query.register(handle_trial_payment_method, F.data.startswith('trial_payment_'))
 

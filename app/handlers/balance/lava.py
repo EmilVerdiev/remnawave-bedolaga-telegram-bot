@@ -38,6 +38,25 @@ async def _get_lava_offer_amounts_kopeks() -> list[int]:
     return sorted(offer_map.keys())
 
 
+def _message_to_edit(message_or_callback: types.Message | types.CallbackQuery) -> types.Message:
+    """У aiogram 3 у CallbackQuery нет edit_text — правим исходное сообщение через .message."""
+    if isinstance(message_or_callback, types.CallbackQuery):
+        if message_or_callback.message is None:
+            raise ValueError('CallbackQuery без message')
+        return message_or_callback.message
+    return message_or_callback
+
+
+def _lava_topup_regen_callback_data(amount_kopeks: int, lava_payment_method_type: str | None) -> str:
+    if lava_payment_method_type == 'SBP':
+        method_token = 'lava_sbp'
+    elif lava_payment_method_type == 'CARD':
+        method_token = 'lava_card'
+    else:
+        method_token = 'lava'
+    return f'lt_regen|{method_token}|{amount_kopeks}'
+
+
 async def _create_lava_payment_and_respond(
     message_or_callback,
     db_user: User,
@@ -45,7 +64,9 @@ async def _create_lava_payment_and_respond(
     amount_kopeks: int,
     edit_message: bool = False,
     lava_payment_method_type: str | None = None,
-):
+    *,
+    refresh_payment_link_only: bool = False,
+) -> bool:
     texts = get_texts(db_user.language)
     amount_rub = amount_kopeks / 100
 
@@ -73,7 +94,7 @@ async def _create_lava_payment_and_respond(
             'Не удалось создать платёж. Попробуйте позже.',
         )
         if edit_message:
-            await message_or_callback.edit_text(
+            await _message_to_edit(message_or_callback).edit_text(
                 error_text,
                 reply_markup=get_back_keyboard(db_user.language),
                 parse_mode='HTML',
@@ -83,10 +104,20 @@ async def _create_lava_payment_and_respond(
                 error_text,
                 parse_mode='HTML',
             )
-        return
+        return False
 
     payment_url = result.get('payment_url')
     display_name = settings.get_lava_display_name()
+
+    regen_row = [
+        InlineKeyboardButton(
+            text=texts.t(
+                'PAYMENT_NEW_LINK_BUTTON',
+                '🔄 Новая ссылка на оплату',
+            ),
+            callback_data=_lava_topup_regen_callback_data(amount_kopeks, lava_payment_method_type),
+        )
+    ]
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -99,6 +130,7 @@ async def _create_lava_payment_and_respond(
                     url=payment_url,
                 )
             ],
+            regen_row,
             [
                 InlineKeyboardButton(
                     text=texts.t('BACK_BUTTON', '◀️ Назад'),
@@ -117,11 +149,16 @@ async def _create_lava_payment_and_respond(
     ).format(name=display_name, amount=f'{amount_rub:.2f}')
 
     if edit_message:
-        await message_or_callback.edit_text(
-            response_text,
-            reply_markup=keyboard,
-            parse_mode='HTML',
-        )
+        target = _message_to_edit(message_or_callback)
+        # Только новая ссылка: текст тот же — edit_text даёт "message is not modified", кнопка URL не меняется.
+        if refresh_payment_link_only:
+            await target.edit_reply_markup(reply_markup=keyboard)
+        else:
+            await target.edit_text(
+                response_text,
+                reply_markup=keyboard,
+                parse_mode='HTML',
+            )
     else:
         await message_or_callback.answer(
             response_text,
@@ -130,6 +167,70 @@ async def _create_lava_payment_and_respond(
         )
 
     logger.info('Lava payment created', telegram_id=db_user.telegram_id, amount_rub=amount_rub)
+    return True
+
+
+@error_handler
+async def regenerate_lava_topup_payment_link(
+    callback: types.CallbackQuery,
+    db_user: User,
+    db: AsyncSession,
+):
+    texts = get_texts(db_user.language)
+
+    try:
+        _, method_token, amount_str = callback.data.split('|', 2)
+        amount_kopeks = int(amount_str)
+    except ValueError:
+        await callback.answer('❌ Некорректный запрос', show_alert=True)
+        return
+
+    if amount_kopeks <= 0:
+        await callback.answer('❌ Некорректная сумма', show_alert=True)
+        return
+
+    restriction_kb = _check_topup_restriction(db_user, texts)
+    if restriction_kb:
+        reason = html.escape(getattr(db_user, 'restriction_reason', None) or 'Действие ограничено администратором')
+        await callback.message.edit_text(
+            f'🚫 <b>Пополнение ограничено</b>\n\n{reason}',
+            parse_mode='HTML',
+            reply_markup=restriction_kb,
+        )
+        await callback.answer()
+        return
+
+    min_amount = settings.LAVA_MIN_AMOUNT_KOPEKS
+    max_amount = settings.LAVA_MAX_AMOUNT_KOPEKS
+    if amount_kopeks < min_amount or amount_kopeks > max_amount:
+        await callback.answer('❌ Сумма вне допустимого диапазона', show_alert=True)
+        return
+
+    lava_payment_method_type = None
+    if method_token == 'lava_sbp':
+        lava_payment_method_type = 'SBP'
+    elif method_token == 'lava_card':
+        lava_payment_method_type = 'CARD'
+    elif method_token != 'lava':
+        await callback.answer('❌ Некорректный способ оплаты', show_alert=True)
+        return
+
+    ok = await _create_lava_payment_and_respond(
+        message_or_callback=callback,
+        db_user=db_user,
+        db=db,
+        amount_kopeks=amount_kopeks,
+        edit_message=True,
+        lava_payment_method_type=lava_payment_method_type,
+        refresh_payment_link_only=True,
+    )
+    if ok:
+        await callback.answer(
+            texts.t('PAYMENT_NEW_LINK_READY', '✅ Новая ссылка готова'),
+            show_alert=False,
+        )
+    else:
+        await callback.answer()
 
 
 @error_handler

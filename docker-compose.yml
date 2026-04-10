@@ -1,5 +1,12 @@
+# Общие DNS для контейнеров (обход проблем резолвинга через 127.0.0.53 на хосте)
+x-dns-resolvers: &dns_resolvers
+  dns:
+    - 1.1.1.1
+    - 8.8.8.8
+
 services:
   postgres:
+    <<: *dns_resolvers
     image: postgres:15-alpine
     container_name: remnawave_bot_db
     restart: unless-stopped
@@ -24,6 +31,7 @@ services:
       start_period: 30s
 
   redis:
+    <<: *dns_resolvers
     image: redis:7-alpine
     container_name: remnawave_bot_redis
     restart: unless-stopped
@@ -39,6 +47,7 @@ services:
       retries: 3
 
   bot:
+    <<: *dns_resolvers
     build: .
     container_name: remnawave_bot
     restart: unless-stopped
@@ -78,9 +87,6 @@ services:
       - ./vpn_logo.png:/app/vpn_logo.png:ro
     ports:
       - '${WEB_API_PORT:-8080}:8080'
-    dns:
-      - 1.1.1.1
-      - 8.8.8.8
     networks:
       - bot_network
     healthcheck:

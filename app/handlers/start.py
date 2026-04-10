@@ -38,6 +38,7 @@ from app.keyboards.inline import (
     get_main_menu_keyboard_async,
     get_post_registration_keyboard,
     get_privacy_policy_keyboard,
+    get_quick_start_compact_keyboard,
     get_rules_keyboard,
     get_trial_keyboard,
 )
@@ -74,15 +75,16 @@ logger = structlog.get_logger(__name__)
 
 # Тексты пре-экрана перед правилами (только при REGISTRATION_QUICK_START)
 REGISTRATION_QUICK_START_PITCH_PART0 = (
-    'Если ты (как и мы), очень устал заебался от бесконечных блокировок мобильного интернета в РФ, '
-    '«белых списков», «Обходыч» решит все эти проблемы!\n\n'
-    'Прямо сейчас у тебя не работает:\n\n'
-    '❌ Интернет с телефона – белые списки!\n'
-    '❌ Telegram – заблокирован\n'
-    '❌ YouTube – заблокирован\n'
-    '❌ Instagram – заблокирован\n'
-    '❌ WhatsApp – заблокирован\n\n'
-    'Классно, да? (нет). И чем же наш «Обходыч» лучше всех остальных?'
+    'Если ты (как и мы), очень устал <s>заебался</s> от бесконечных блокировок мобильного интернета в РФ '
+    'и «белых списков», «<b>Обходыч</b>» как раз про то, чтобы это снова стало нормально пользоваться.\n\n'
+    '<b>Сейчас без стабильного обхода часто не открывается:</b>\n\n'
+    '❌ Интернет с телефона — белые списки\n'
+    '❌ Telegram — не грузится или работает через раз\n'
+    '❌ YouTube — не открывается\n'
+    '❌ Instagram — не открывается\n'
+    '❌ WhatsApp — не открывается\n\n'
+    'Классно, да? (нет). Зачем тогда «<b>Обходыч</b>»: стабильнее «однодневок», проще в настройке и с '
+    'нормальной поддержкой — об этом подробнее в следующем сообщении 👇'
 )
 
 REGISTRATION_QUICK_START_PITCH_PART1 = (
@@ -105,6 +107,7 @@ REGISTRATION_QUICK_START_PITCH_PART2 = (
 )
 
 QUICK_START_ACTIVATE_CALLBACK = 'quick_start_activate_bypass'
+QUICK_START_COMPACT_LANDING_FLAG = 'quick_start_compact_landing'
 
 
 async def _send_registration_quick_start_pitch(bot: Bot, chat_id: int, state: FSMContext) -> bool:
@@ -112,11 +115,12 @@ async def _send_registration_quick_start_pitch(bot: Bot, chat_id: int, state: FS
     if not getattr(settings, 'REGISTRATION_QUICK_START', False):
         return False
     try:
-        await bot.send_message(chat_id, REGISTRATION_QUICK_START_PITCH_PART0)
-        await bot.send_message(chat_id, REGISTRATION_QUICK_START_PITCH_PART1)
+        await bot.send_message(chat_id, REGISTRATION_QUICK_START_PITCH_PART0, parse_mode=ParseMode.HTML)
+        await bot.send_message(chat_id, REGISTRATION_QUICK_START_PITCH_PART1, parse_mode=ParseMode.HTML)
         await bot.send_message(
             chat_id,
             REGISTRATION_QUICK_START_PITCH_PART2,
+            parse_mode=ParseMode.HTML,
             reply_markup=types.InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -175,11 +179,41 @@ async def _maybe_send_quick_start_trial_offer(bot: Bot, chat_id: int, user: User
         await bot.send_message(
             chat_id,
             trial_text,
-            reply_markup=get_trial_keyboard(user.language),
+            reply_markup=get_trial_keyboard(user.language, include_back_button=False),
             parse_mode='HTML',
         )
     except Exception as e:
         logger.error('Не удалось отправить экран триала после быстрой регистрации', error=e)
+
+
+def _build_quick_start_compact_text(user: types.User, fallback_name: str = '') -> str:
+    username = user.username or fallback_name or user.first_name or 'друг'
+    safe_username = html.escape(username)
+    return (
+        f'Привет, {safe_username}!\n\n'
+        'Если ты хочешь посмотреть, как работает наш сервис «Обходыч», просто нажми на кнопку '
+        '«Активировать тест-драйв», и у тебя на 24 часа будет полный доступ.\n\n'
+        'Либо ты можешь сразу оформить подписку на на месяц, полгода или год ;)'
+    )
+
+
+def _should_show_quick_start_compact_for_existing_user(user: User) -> bool:
+    """Показывать ли quick-start экран существующему пользователю."""
+    if not getattr(settings, 'REGISTRATION_QUICK_START', False):
+        return False
+
+    user_subscriptions = getattr(user, 'subscriptions', None) or []
+    has_any_subscription_history = bool(user_subscriptions)
+    has_any_active_subscription = any(sub.is_active for sub in user_subscriptions)
+    has_any_paid_subscription_history = user.has_had_paid_subscription or any(
+        not getattr(sub, 'is_trial', False) for sub in user_subscriptions
+    )
+
+    return (
+        not has_any_subscription_history
+        and not has_any_active_subscription
+        and not has_any_paid_subscription_history
+    )
 
 
 async def _activate_pending_gift_after_registration(
@@ -595,11 +629,13 @@ async def handle_potential_referral_code(message: types.Message, state: FSMConte
         if current_state != RegistrationStates.waiting_for_referral_code.state:
             language = data.get('language', DEFAULT_LANGUAGE)
             texts = get_texts(language)
-
-            rules_text = await get_rules(language)
-            await message.answer(rules_text, reply_markup=get_rules_keyboard(language))
-            await state.set_state(RegistrationStates.waiting_for_rules_accept)
-            logger.info('📋 Правила отправлены после ввода реферального кода')
+            if getattr(settings, 'REGISTRATION_QUICK_START', False):
+                await complete_registration(message, state, db)
+            else:
+                rules_text = await get_rules(language)
+                await message.answer(rules_text, reply_markup=get_rules_keyboard(language))
+                await state.set_state(RegistrationStates.waiting_for_rules_accept)
+                logger.info('📋 Правила отправлены после ввода реферального кода')
         else:
             await complete_registration(message, state, db)
 
@@ -630,11 +666,13 @@ async def handle_potential_referral_code(message: types.Message, state: FSMConte
         if current_state != RegistrationStates.waiting_for_referral_code.state:
             language = data.get('language', DEFAULT_LANGUAGE)
             texts = get_texts(language)
-
-            rules_text = await get_rules(language)
-            await message.answer(rules_text, reply_markup=get_rules_keyboard(language))
-            await state.set_state(RegistrationStates.waiting_for_rules_accept)
-            logger.info('📋 Правила отправлены после принятия промокода')
+            if getattr(settings, 'REGISTRATION_QUICK_START', False):
+                await complete_registration(message, state, db)
+            else:
+                rules_text = await get_rules(language)
+                await message.answer(rules_text, reply_markup=get_rules_keyboard(language))
+                await state.set_state(RegistrationStates.waiting_for_rules_accept)
+                logger.info('📋 Правила отправлены после принятия промокода')
         else:
             await complete_registration(message, state, db)
 
@@ -962,6 +1000,18 @@ async def cmd_start(message: types.Message, state: FSMContext, db: AsyncSession,
             # Refresh user to pick up newly created subscriptions
             await db.refresh(user, attribute_names=['subscriptions'])
 
+        if _should_show_quick_start_compact_for_existing_user(user):
+            compact_text = _build_quick_start_compact_text(
+                message.from_user,
+                fallback_name=(user.first_name or user.username or user.full_name or ''),
+            )
+            await message.answer(
+                compact_text,
+                reply_markup=get_quick_start_compact_keyboard(user.language),
+            )
+            await state.clear()
+            return
+
         user_subs_for_flags = getattr(user, 'subscriptions', None) or []
         first_sub_for_flags = next(
             (s for s in user_subs_for_flags if s.is_active), user_subs_for_flags[0] if user_subs_for_flags else None
@@ -1288,24 +1338,14 @@ async def _show_privacy_policy_after_rules(
 
 
 async def process_quick_start_activate(callback: types.CallbackQuery, state: FSMContext, db: AsyncSession):
-    """Кнопка «Активировать обход!» — показ правил (шаг после пре-экрана QUICK_START)."""
+    """Кнопка «Активировать обход!» — сразу завершает регистрацию без экранов правил."""
     await callback.answer()
-    data = await state.get_data() or {}
-    language = data.get('language', DEFAULT_LANGUAGE)
-    rules_text = await get_rules(language)
-    try:
-        await callback.message.answer(rules_text, reply_markup=get_rules_keyboard(language))
-    except TelegramForbiddenError:
-        logger.warning(
-            '⚠️ QUICK_START: пользователь заблокировал бота при отправке правил',
-            from_user_id=callback.from_user.id,
-        )
-        return
-    except Exception as e:
-        logger.error('Ошибка отправки правил после QUICK_START pitch', error=e)
-        return
-    await state.set_state(RegistrationStates.waiting_for_rules_accept)
-    logger.info('📋 QUICK_START: правила отправлены после кнопки активации', from_user_id=callback.from_user.id)
+    logger.info(
+        '⚡ QUICK_START: активация без правил/политики, продолжаем регистрацию',
+        from_user_id=callback.from_user.id,
+    )
+    await state.update_data(**{QUICK_START_COMPACT_LANDING_FLAG: True})
+    await complete_registration_from_callback(callback, state, db)
 
 
 async def _continue_registration_after_rules(
@@ -1662,6 +1702,18 @@ async def complete_registration_from_callback(callback: types.CallbackQuery, sta
 
         await db.refresh(existing_user, ['subscriptions'])
 
+        if _should_show_quick_start_compact_for_existing_user(existing_user):
+            compact_text = _build_quick_start_compact_text(
+                callback.from_user,
+                fallback_name=(existing_user.first_name or existing_user.username or existing_user.full_name or ''),
+            )
+            await callback.message.answer(
+                compact_text,
+                reply_markup=get_quick_start_compact_keyboard(existing_user.language),
+            )
+            await state.clear()
+            return
+
         existing_user_subs = getattr(existing_user, 'subscriptions', None) or []
         first_existing_sub = next(
             (s for s in existing_user_subs if s.is_active), existing_user_subs[0] if existing_user_subs else None
@@ -1715,6 +1767,7 @@ async def complete_registration_from_callback(callback: types.CallbackQuery, sta
         return
 
     data = await state.get_data() or {}
+    quick_start_compact_landing = bool(data.get(QUICK_START_COMPACT_LANDING_FLAG))
     language = data.get('language', DEFAULT_LANGUAGE)
     texts = get_texts(language)
 
@@ -1866,7 +1919,7 @@ async def complete_registration_from_callback(callback: types.CallbackQuery, sta
 
     await state.clear()
 
-    if campaign_message:
+    if campaign_message and not quick_start_compact_landing:
         try:
             await callback.message.answer(campaign_message)
         except Exception as e:
@@ -1876,6 +1929,22 @@ async def complete_registration_from_callback(callback: types.CallbackQuery, sta
 
     offer_text = await get_welcome_text_for_user(db, callback.from_user)
     pinned_message = await get_active_pinned_message(db)
+
+    if quick_start_compact_landing:
+        compact_text = _build_quick_start_compact_text(
+            callback.from_user,
+            fallback_name=(user.first_name or user.username or user.full_name or ''),
+        )
+        try:
+            await callback.message.answer(
+                compact_text,
+                reply_markup=get_quick_start_compact_keyboard(user.language),
+            )
+        except Exception as e:
+            logger.error('Ошибка отправки compact quick-start окна', error=e)
+            await callback.message.answer(compact_text)
+        logger.info('✅ Quick-start compact окно отправлено', telegram_id=user.telegram_id)
+        return
 
     _welcome_subs = getattr(user, 'subscriptions', None) or []
     _welcome_has_sub = any(s.is_active for s in _welcome_subs)
@@ -1991,6 +2060,18 @@ async def complete_registration(message: types.Message, state: FSMContext, db: A
             )
 
         await db.refresh(existing_user, ['subscriptions'])
+
+        if _should_show_quick_start_compact_for_existing_user(existing_user):
+            compact_text = _build_quick_start_compact_text(
+                message.from_user,
+                fallback_name=(existing_user.first_name or existing_user.username or existing_user.full_name or ''),
+            )
+            await message.answer(
+                compact_text,
+                reply_markup=get_quick_start_compact_keyboard(existing_user.language),
+            )
+            await state.clear()
+            return
 
         existing_user_subs = getattr(existing_user, 'subscriptions', None) or []
         first_existing_sub = next(
@@ -2876,6 +2957,9 @@ async def required_sub_channel_check(
             else:
                 if await _send_registration_quick_start_pitch(bot, query.from_user.id, state):
                     return
+                if getattr(settings, 'REGISTRATION_QUICK_START', False):
+                    await complete_registration_from_callback(query, state, db)
+                    return
 
                 rules_text = await get_rules(language)
 
@@ -2960,6 +3044,11 @@ def register_handlers(dp: Dispatcher):
         process_quick_start_activate,
         F.data == QUICK_START_ACTIVATE_CALLBACK,
         StateFilter(RegistrationStates.waiting_for_quick_start_activate),
+    )
+    # Fallback на случай, если FSM-состояние сброшено, но пользователь нажал кнопку из quick-start сообщения.
+    dp.callback_query.register(
+        process_quick_start_activate,
+        F.data == QUICK_START_ACTIVATE_CALLBACK,
     )
     logger.debug('Зарегистрирован process_quick_start_activate')
 

@@ -35,6 +35,13 @@ from app.utils.promo_offer import get_user_active_promo_discount_percent
 
 logger = structlog.get_logger(__name__)
 
+TRIAL_ANALOG_TARIFF_NAME = 'Тест-драйв 1 день'
+
+
+def _filter_public_tariffs(tariffs: list[Tariff]) -> list[Tariff]:
+    """Скрывает служебный тариф тест-драйва из общих списков тарифов."""
+    return [tariff for tariff in tariffs if (tariff.name or '').strip() != TRIAL_ANALOG_TARIFF_NAME]
+
 # Пояснение про лимит трафика на мобильных «белых списках» (мгновенная смена / покупка тарифа)
 CALLBACK_INSTANT_SW_TRAFFIC_WHY = 'instant_sw_traffic_why'
 CALLBACK_BUY_TRAFFIC_WHY = 'buy_traffic_why'
@@ -581,7 +588,7 @@ async def show_tariffs_list(
 
     # Получаем доступные тарифы
     promo_group_id = getattr(db_user, 'promo_group_id', None)
-    tariffs = await get_tariffs_for_user(db, promo_group_id)
+    tariffs = _filter_public_tariffs(await get_tariffs_for_user(db, promo_group_id))
 
     if not tariffs:
         await callback.message.edit_text(
@@ -1378,6 +1385,40 @@ async def confirm_tariff_purchase(
     # Проверяем баланс (user already locked, balance is fresh)
     user_balance = db_user.balance_kopeks or 0
     if user_balance < final_price:
+        # Для служебного тарифа тест-драйва сразу открываем пополнение баланса.
+        # Это поведение используется только по кнопке "Активировать тест-драйв".
+        if (tariff.name or '').strip() == TRIAL_ANALOG_TARIFF_NAME:
+            missing = final_price - user_balance
+
+            if settings.is_multi_tariff_enabled():
+                from app.database.crud.subscription import get_subscription_by_user_and_tariff
+
+                existing_sub_for_cart = await get_subscription_by_user_and_tariff(db, db_user.id, tariff_id)
+            else:
+                existing_sub_for_cart = await get_subscription_by_user_id(db, db_user.id)
+
+            cart_data = {
+                'cart_mode': 'tariff_purchase',
+                'tariff_id': tariff_id,
+                'period_days': period,
+                'total_price': final_price,
+                'user_id': db_user.id,
+                'saved_cart': True,
+                'missing_amount': missing,
+                'return_to_cart': True,
+                'description': f'Покупка тарифа {tariff.name} на {period} дней',
+                'traffic_limit_gb': tariff.traffic_limit_gb,
+                'device_limit': tariff.device_limit,
+                'allowed_squads': tariff.allowed_squads or [],
+                'subscription_id': existing_sub_for_cart.id if existing_sub_for_cart else None,
+            }
+            await user_cart_service.save_user_cart(db_user.id, cart_data)
+
+            from app.handlers.balance.main import show_payment_methods
+
+            await show_payment_methods(callback, db_user, db, state)
+            return
+
         await callback.answer('Недостаточно средств на балансе', show_alert=True)
         return
 
@@ -2552,7 +2593,7 @@ async def show_tariff_switch_list(
 
     # Получаем доступные тарифы
     promo_group_id = getattr(db_user, 'promo_group_id', None)
-    tariffs = await get_tariffs_for_user(db, promo_group_id)
+    tariffs = _filter_public_tariffs(await get_tariffs_for_user(db, promo_group_id))
 
     # Filter out ALL tariffs user already has active subscriptions for
     if settings.is_multi_tariff_enabled():
@@ -3429,7 +3470,7 @@ async def show_instant_switch_list(
 
     # Получаем доступные тарифы
     promo_group_id = getattr(db_user, 'promo_group_id', None)
-    tariffs = await get_tariffs_for_user(db, promo_group_id)
+    tariffs = _filter_public_tariffs(await get_tariffs_for_user(db, promo_group_id))
 
     # Filter out ALL tariffs user already has active subscriptions for
     if settings.is_multi_tariff_enabled():

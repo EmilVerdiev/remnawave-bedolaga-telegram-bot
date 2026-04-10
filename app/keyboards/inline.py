@@ -286,6 +286,16 @@ def get_post_registration_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKe
     )
 
 
+def get_quick_start_compact_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text='💎 Купить подписку', callback_data='menu_buy')],
+            [InlineKeyboardButton(text='🧪 Активировать тест-драйв', callback_data='trial_activate')],
+            [InlineKeyboardButton(text='🛠️ Тех. поддержка', callback_data='menu_support')],
+        ]
+    )
+
+
 def get_language_selection_keyboard(
     current_language: str | None = None,
     *,
@@ -679,8 +689,6 @@ def get_main_menu_keyboard(
 
     keyboard.append([InlineKeyboardButton(text=balance_button_text, callback_data='menu_balance')])
 
-    show_trial = not has_had_paid_subscription and not has_active_subscription
-
     show_buy = not has_active_subscription or not subscription_is_active
     current_subscription = subscription
     bool(
@@ -696,9 +704,6 @@ def get_main_menu_keyboard(
         )
 
     subscription_buttons: list[InlineKeyboardButton] = []
-
-    if show_trial:
-        subscription_buttons.append(InlineKeyboardButton(text=texts.MENU_TRIAL, callback_data='menu_trial'))
 
     if show_buy:
         subscription_buttons.append(InlineKeyboardButton(text=texts.MENU_BUY_SUBSCRIPTION, callback_data='menu_buy'))
@@ -1297,16 +1302,16 @@ def get_insufficient_balance_keyboard_with_cart(
     return keyboard
 
 
-def get_trial_keyboard(language: str = 'ru') -> InlineKeyboardMarkup:
+def get_trial_keyboard(language: str = 'ru', include_back_button: bool = True) -> InlineKeyboardMarkup:
     texts = get_texts(language)
+    row = [
+        InlineKeyboardButton(text=texts.t('TRIAL_ACTIVATE_BUTTON', '🎁 Активировать'), callback_data='trial_activate')
+    ]
+    if include_back_button:
+        row.append(InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu'))
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=texts.t('TRIAL_ACTIVATE_BUTTON', '🎁 Активировать'), callback_data='trial_activate'
-                ),
-                InlineKeyboardButton(text=texts.BACK, callback_data='back_to_menu'),
-            ]
+            row
         ]
     )
 
@@ -1919,24 +1924,10 @@ def get_support_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMark
     try:
         from app.services.support_settings_service import SupportSettingsService
 
-        tickets_enabled = SupportSettingsService.is_tickets_enabled()
         contact_enabled = SupportSettingsService.is_contact_enabled()
     except Exception:
-        tickets_enabled = True
         contact_enabled = True
     rows: list[list[InlineKeyboardButton]] = []
-    # Tickets
-    if tickets_enabled:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=texts.t('CREATE_TICKET_BUTTON', '🎫 Создать тикет'), callback_data='create_ticket'
-                )
-            ]
-        )
-        rows.append(
-            [InlineKeyboardButton(text=texts.t('MY_TICKETS_BUTTON', '📋 Мои тикеты'), callback_data='my_tickets')]
-        )
     # Direct contact
     if contact_enabled and settings.get_support_contact_url():
         rows.append(

@@ -152,30 +152,34 @@ class Texts:
 
     def get(self, item: str, default: Any = None) -> Any:
         try:
-            return self._get_value(item)
+            return self._resolve_locale_key(item)
         except KeyError:
             return default
 
     def t(self, key: str, default: Any = None) -> Any:
         try:
-            return self._get_value(key)
+            return self._resolve_locale_key(key)
         except KeyError:
             if default is not None:
                 return default
-            raise
+            _logger.warning('Missing localization key', item=key, language=self.language)
+            raise KeyError(key) from None
 
-    def _get_value(self, item: str) -> Any:
+    def _resolve_locale_key(self, item: str) -> Any:
         if item == 'RULES_TEXT':
             return _get_cached_rules_value(self.language)
-
         if item in self._values:
             return self._values[item]
-
         if item in self._fallback_values:
             return self._fallback_values[item]
-
-        _logger.warning("Missing localization key '' for language ''", item=item, language=self.language)
         raise KeyError(item)
+
+    def _get_value(self, item: str) -> Any:
+        try:
+            return self._resolve_locale_key(item)
+        except KeyError:
+            _logger.warning('Missing localization key', item=item, language=self.language)
+            raise
 
     @staticmethod
     def format_price(kopeks: int) -> str:

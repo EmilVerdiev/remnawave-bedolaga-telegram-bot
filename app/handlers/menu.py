@@ -22,6 +22,7 @@ from app.keyboards.inline import (
     get_info_menu_keyboard,
     get_language_selection_keyboard,
     get_main_menu_keyboard_async,
+    get_quick_start_compact_keyboard,
 )
 from app.localization.texts import get_rules, get_texts
 from app.services.faq_service import FaqService
@@ -142,6 +143,17 @@ def _build_group_discount_lines(group: PromoGroup, texts, language: str) -> list
             )
 
     return lines
+
+
+def _build_quick_start_compact_text_for_menu(user: User) -> str:
+    username = user.username or user.first_name or user.full_name or 'друг'
+    safe_username = html.escape(username)
+    return (
+        f'Привет, {safe_username}!\n\n'
+        'Если ты хочешь посмотреть, как работает наш сервис «Обходыч», просто нажми на кнопку '
+        '«Активировать тест-драйв», и у тебя на 24 часа будет полный доступ.\n\n'
+        'Либо ты можешь сразу оформить подписку на на месяц, полгода или год ;)'
+    )
 
 
 async def show_main_menu(
@@ -1011,6 +1023,30 @@ async def handle_back_to_menu(callback: types.CallbackQuery, state: FSMContext, 
     await state.clear()
 
     texts = get_texts(db_user.language)
+
+    # В режиме quick-start показываем компактное окно только действительно новым пользователям
+    # (без истории подписок и без факта платной подписки).
+    user_subscriptions = getattr(db_user, 'subscriptions', None) or []
+    has_any_subscription_history = bool(user_subscriptions)
+    has_any_active_subscription = any(sub.is_active for sub in user_subscriptions)
+    has_any_paid_subscription_history = db_user.has_had_paid_subscription or any(
+        not getattr(sub, 'is_trial', False) for sub in user_subscriptions
+    )
+    if (
+        getattr(settings, 'REGISTRATION_QUICK_START', False)
+        and not has_any_subscription_history
+        and not has_any_paid_subscription_history
+        and not has_any_active_subscription
+    ):
+        compact_text = _build_quick_start_compact_text_for_menu(db_user)
+        await edit_or_answer_photo(
+            callback=callback,
+            caption=compact_text,
+            keyboard=get_quick_start_compact_keyboard(db_user.language),
+            parse_mode=None,
+        )
+        await callback.answer()
+        return
 
     # Multi-tariff aware: check if user has ANY active subscription
     has_active_subscription = any(sub.is_active for sub in (getattr(db_user, 'subscriptions', None) or []))
