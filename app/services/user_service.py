@@ -36,6 +36,7 @@ from app.database.models import (
     MulenPayPayment,
     Pal24Payment,
     PaymentMethod,
+    LavaPayment,
     PlategaPayment,
     PromoCode,
     PromoCodeUse,
@@ -995,6 +996,22 @@ class UserService:
                         await db.flush()
             except Exception as e:
                 logger.error('❌ Ошибка удаления Platega платежей', error=e)
+
+            try:
+                async with db.begin_nested():
+                    lava_result = await db.execute(select(LavaPayment).where(LavaPayment.user_id == user_id))
+                    lava_payments = lava_result.scalars().all()
+
+                    if lava_payments:
+                        logger.info('🔄 Удаляем Lava платежей', lava_payments_count=len(lava_payments))
+                        await db.execute(
+                            update(LavaPayment).where(LavaPayment.user_id == user_id).values(transaction_id=None)
+                        )
+                        await db.flush()
+                        await db.execute(delete(LavaPayment).where(LavaPayment.user_id == user_id))
+                        await db.flush()
+            except Exception as e:
+                logger.error('❌ Ошибка удаления Lava платежей', error=e)
 
             try:
                 async with db.begin_nested():
