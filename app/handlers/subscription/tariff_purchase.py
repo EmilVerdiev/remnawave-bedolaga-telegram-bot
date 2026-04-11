@@ -3429,13 +3429,20 @@ async def show_instant_switch_list(
     state: FSMContext,
 ):
     """Показывает список тарифов для мгновенного переключения."""
-
-    texts = get_texts(db_user.language)
     await state.clear()
+
+    # Мгновенная смена отключена: используем только платную смену тарифа по периоду.
+    await show_tariff_switch_list(callback, db_user, db, state)
+    return
 
     # Проверяем наличие активной подписки
     subscription, _sub_id = await _resolve_subscription(callback, db_user, db, state)
     if not subscription:
+        return
+
+    if subscription.is_trial:
+        # Для триала показываем только платную смену тарифа по периоду.
+        await show_tariff_switch_list(callback, db_user, db, state)
         return
 
     if not subscription.tariff_id:
@@ -3543,6 +3550,9 @@ async def preview_instant_switch(
     state: FSMContext,
 ):
     """Показывает превью мгновенного переключения тарифа."""
+    # Мгновенная смена отключена: перенаправляем на платный сценарий смены тарифа.
+    await show_tariff_switch_list(callback, db_user, db, state)
+    return
 
     tariff_id = int(callback.data.split(':')[1])
     new_tariff = await get_tariff_by_id(db, tariff_id)
@@ -3560,6 +3570,10 @@ async def preview_instant_switch(
     subscription, _isw_sub_id = await _resolve_subscription(callback, db_user, db, state)
     if not subscription or not subscription.tariff_id:
         await callback.answer('Подписка не найдена', show_alert=True)
+        return
+
+    if subscription.is_trial:
+        await show_tariff_switch_list(callback, db_user, db, state)
         return
 
     current_tariff_id = current_tariff_id or subscription.tariff_id
@@ -3710,6 +3724,9 @@ async def confirm_instant_switch(
     state: FSMContext,
 ):
     """Подтверждает мгновенное переключение тарифа."""
+    # Мгновенная смена отключена: перенаправляем на платный сценарий смены тарифа.
+    await show_tariff_switch_list(callback, db_user, db, state)
+    return
 
     tariff_id = int(callback.data.split(':')[1])
     new_tariff = await get_tariff_by_id(db, tariff_id)
@@ -3722,6 +3739,10 @@ async def confirm_instant_switch(
     subscription, _isw_confirm_sub_id = await _resolve_subscription(callback, db_user, db, state)
     if not subscription:
         await callback.answer('Подписка не найдена', show_alert=True)
+        return
+
+    if subscription.is_trial:
+        await show_tariff_switch_list(callback, db_user, db, state)
         return
 
     from app.database.crud.user import lock_user_for_pricing

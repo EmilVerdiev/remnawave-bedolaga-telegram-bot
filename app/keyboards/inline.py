@@ -1206,8 +1206,8 @@ def get_subscription_keyboard(
                 )
             ]
             if settings.is_tariffs_mode() and subscription:
-                # Для суточных тарифов переходим на список тарифов, для обычных - мгновенное переключение
-                tariff_callback = 'tariff_switch' if is_daily_tariff else 'instant_switch'
+                # Для всех подписок используем только платную смену тарифа по периоду.
+                tariff_callback = 'tariff_switch'
                 settings_row.append(
                     InlineKeyboardButton(
                         text=texts.t('CHANGE_TARIFF_BUTTON', '📦 Тариф'), callback_data=tariff_callback
