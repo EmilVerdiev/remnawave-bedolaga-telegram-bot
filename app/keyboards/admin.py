@@ -2247,13 +2247,18 @@ BROADCAST_BUTTONS = {
         'text_key': 'ADMIN_BROADCAST_BUTTON_HOME',
         'callback': 'back_to_menu',
     },
+    'buy': {
+        'default_text': '🛒 Купить подписку',
+        'text_key': 'ADMIN_BROADCAST_BUTTON_BUY',
+        'callback': 'menu_buy',
+    },
 }
 
 BROADCAST_BUTTON_ROWS: tuple[tuple[str, ...], ...] = (
     ('balance', 'referrals'),
     ('promocode', 'connect'),
     ('subscription', 'support'),
-    ('home',),
+    ('buy', 'home'),
 )
 
 

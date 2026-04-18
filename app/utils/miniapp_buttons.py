@@ -61,6 +61,7 @@ BUTTON_KEY_TO_CABINET_PATH: dict[str, str] = {
     'subscription': '/subscription',
     'support': '/support',
     'home': '/',
+    'buy': '/subscription',
 }
 
 # Valid style values accepted by the Telegram Bot API.
