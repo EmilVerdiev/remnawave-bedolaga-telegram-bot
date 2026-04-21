@@ -392,7 +392,13 @@ class CryptoBotPaymentMixin:
                 try:
                     from app.services.payment.common import send_cart_notification_after_topup
 
-                    await send_cart_notification_after_topup(user, amount_kopeks, db, bot_instance)
+                    await send_cart_notification_after_topup(
+                        user,
+                        amount_kopeks,
+                        db,
+                        bot_instance,
+                        skip_duplicate_cart_balance_message=bool(user_notification and bot_instance),
+                    )
                 except Exception as error:
                     logger.error(
                         'Ошибка при работе с сохраненной корзиной для пользователя',

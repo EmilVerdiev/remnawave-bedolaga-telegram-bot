@@ -106,6 +106,9 @@ REGISTRATION_QUICK_START_PITCH_PART2 = (
     'для обхода блокировок, вместо вереницы постоянно отлетающих «аналогичных» сервисов 😎'
 )
 
+# Третье сообщение при REGISTRATION_START_MESSAGES_ENABLED: без кнопки, призыв нажать «Подключиться» внизу (reply-меню).
+REGISTRATION_START_MESSAGES_PART2_FOOTER = '\n\n👇 <b>Жмите «Подключиться» ниже!</b>'
+
 QUICK_START_ACTIVATE_CALLBACK = 'quick_start_activate_bypass'
 QUICK_START_COMPACT_LANDING_FLAG = 'quick_start_compact_landing'
 
@@ -141,6 +144,31 @@ async def _send_registration_quick_start_pitch(bot: Bot, chat_id: int, state: FS
 
     await state.set_state(RegistrationStates.waiting_for_quick_start_activate)
     logger.info('📢 QUICK_START: пре-правила питч отправлен', chat_id=chat_id)
+    return True
+
+
+async def _send_registration_start_messages_triple(bot: Bot, chat_id: int) -> bool:
+    """Три приветственных сообщения для нового пользователя (REGISTRATION_START_MESSAGES_ENABLED).
+
+    Третье — без инлайн-кнопки, с текстом-подсказкой про «Подключиться» в меню.
+    """
+    if not getattr(settings, 'REGISTRATION_START_MESSAGES_ENABLED', False):
+        return False
+    if getattr(settings, 'REGISTRATION_QUICK_START', False):
+        return False
+    try:
+        await bot.send_message(chat_id, REGISTRATION_QUICK_START_PITCH_PART0, parse_mode=ParseMode.HTML)
+        await bot.send_message(chat_id, REGISTRATION_QUICK_START_PITCH_PART1, parse_mode=ParseMode.HTML)
+        third_text = REGISTRATION_QUICK_START_PITCH_PART2 + REGISTRATION_START_MESSAGES_PART2_FOOTER
+        await bot.send_message(chat_id, third_text, parse_mode=ParseMode.HTML)
+    except TelegramForbiddenError:
+        logger.warning('⚠️ START_MESSAGES: пользователь заблокировал бота', chat_id=chat_id)
+        return False
+    except Exception as e:
+        logger.error('Ошибка отправки REGISTRATION_START_MESSAGES', error=e)
+        return False
+
+    logger.info('📢 START_MESSAGES: три приветственных сообщения отправлены', chat_id=chat_id)
     return True
 
 
@@ -722,6 +750,15 @@ async def _continue_registration_after_language(
     if not target_message:
         logger.warning('⚠️ LANGUAGE: Нет доступного сообщения для продолжения регистрации')
         return
+
+    if (
+        getattr(settings, 'REGISTRATION_START_MESSAGES_ENABLED', False)
+        and not data.get('registration_start_messages_sent')
+        and not getattr(settings, 'REGISTRATION_QUICK_START', False)
+    ):
+        if await _send_registration_start_messages_triple(target_message.bot, target_message.chat.id):
+            data['registration_start_messages_sent'] = True
+            await state.set_data(data)
 
     async def _complete_registration_wrapper():
         if callback:

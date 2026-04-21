@@ -597,7 +597,13 @@ class WataPaymentMixin:
         try:
             from app.services.payment.common import send_cart_notification_after_topup
 
-            await send_cart_notification_after_topup(user, payment.amount_kopeks, db, getattr(self, 'bot', None))
+            await send_cart_notification_after_topup(
+                user,
+                payment.amount_kopeks,
+                db,
+                getattr(self, 'bot', None),
+                skip_duplicate_cart_balance_message=True,
+            )
         except Exception as error:
             logger.debug('Не удалось отправить напоминание о корзине после WATA', error=error)
 

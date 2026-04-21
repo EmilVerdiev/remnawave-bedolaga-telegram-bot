@@ -308,8 +308,14 @@ async def send_cart_notification_after_topup(
     amount_kopeks: int,
     db: AsyncSession,
     bot: Any | None,
+    *,
+    skip_duplicate_cart_balance_message: bool = False,
 ) -> bool:
     """Handle saved cart after balance top-up: try auto-purchase, then send notification.
+
+    When the payment provider already sent a detailed receipt (e.g. «Пополнение успешно!»),
+    set ``skip_duplicate_cart_balance_message=True`` to avoid a second message that repeats
+    balance/cart text (auto-purchase and other logic still run).
 
     Returns True if a cart notification was sent.
     """
@@ -364,6 +370,13 @@ async def send_cart_notification_after_topup(
             return False
 
         if not bot or not getattr(user, 'telegram_id', None):
+            return False
+
+        if skip_duplicate_cart_balance_message:
+            logger.info(
+                'Skipping cart balance reminder: user already received payment receipt in this flow',
+                user_id=user.id,
+            )
             return False
 
         # Refresh balance from DB to account for any changes during auto-purchase attempt

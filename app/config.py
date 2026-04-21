@@ -655,6 +655,9 @@ class Settings(BaseSettings):
     # Упрощённая регистрация: язык из Telegram, без шага реферала/промокода после правил,
     # после регистрации сразу сообщение с предложением триала (как в menu_trial).
     REGISTRATION_QUICK_START: bool = False
+    # Три приветственных сообщения новому пользователю (тексты как у QUICK_START-питча).
+    # Несовместимо с REGISTRATION_QUICK_START=True (там свои три сообщения и кнопка).
+    REGISTRATION_START_MESSAGES_ENABLED: bool = False
 
     DEFAULT_LANGUAGE: str = 'ru'
     AVAILABLE_LANGUAGES: str = 'ru,en,zh,fa'

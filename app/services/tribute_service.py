@@ -319,7 +319,13 @@ class TributeService:
                 # Проверяем наличие сохраненной корзины для возврата к оформлению подписки
                 from app.services.payment.common import send_cart_notification_after_topup
 
-                await send_cart_notification_after_topup(user, amount_kopeks, session, self.bot)
+                await send_cart_notification_after_topup(
+                    user,
+                    amount_kopeks,
+                    session,
+                    self.bot,
+                    skip_duplicate_cart_balance_message=True,
+                )
                 break
 
         except Exception as e:

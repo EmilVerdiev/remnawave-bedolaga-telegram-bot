@@ -385,7 +385,13 @@ class CloudPaymentsPaymentMixin:
         try:
             from app.services.payment.common import send_cart_notification_after_topup
 
-            await send_cart_notification_after_topup(user, amount_kopeks, db, getattr(self, 'bot', None))
+            await send_cart_notification_after_topup(
+                user,
+                amount_kopeks,
+                db,
+                getattr(self, 'bot', None),
+                skip_duplicate_cart_balance_message=bool(user.telegram_id),
+            )
         except Exception as error:
             logger.exception('Ошибка автопокупки после CloudPayments', error=error)
 
