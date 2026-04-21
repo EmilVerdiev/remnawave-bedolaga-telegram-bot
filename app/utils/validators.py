@@ -208,6 +208,45 @@ def sanitize_telegram_name(name: str | None) -> str | None:
         return name
 
 
+def check_banned_words_in_user_name(first_name: str | None, last_name: str | None, username: str | None, banned_keywords: list[str]) -> tuple[bool, str | None]:
+    """
+    Проверяет, содержит ли имя пользователя запрещенные слова.
+    
+    Args:
+        first_name: Имя пользователя
+        last_name: Фамилия пользователя
+        username: Username пользователя
+        banned_keywords: Список запрещенных слов
+        
+    Returns:
+        tuple[bool, str | None]: (True, найденное_слово) если найдено банворд, (False, None) если нет
+    """
+    if not banned_keywords:
+        return False, None
+    
+    # Объединяем все поля для проверки
+    fields_to_check = []
+    if first_name:
+        fields_to_check.append(first_name.lower())
+    if last_name:
+        fields_to_check.append(last_name.lower())
+    if username:
+        fields_to_check.append(username.lower())
+    
+    if not fields_to_check:
+        return False, None
+    
+    # Проверяем каждое запрещенное слово
+    for banned_word in banned_keywords:
+        banned_lower = banned_word.lower()
+        for field in fields_to_check:
+            # Проверяем точное совпадение слова или подстроку
+            if banned_lower in field:
+                return True, banned_word
+    
+    return False, None
+
+
 def validate_device_count(count: str | int) -> int | None:
     try:
         count_int = int(count)

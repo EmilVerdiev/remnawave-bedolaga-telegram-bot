@@ -20,6 +20,28 @@ DEFAULT_DISPLAY_NAME_BANNED_KEYWORDS: list[str] = [
     # Примеры: "tme", "joingroup", "support", "admin"
 ]
 
+# Запрещенные слова для имен пользователей (first_name, last_name, username)
+# При обнаружении пользователь автоматически блокируется
+DEFAULT_USER_NAME_BANNED_KEYWORDS: list[str] = [
+    "порно", "porn", "cp", "child porn", "детское порно",
+    "педофил", "pedofil", "pedophil", "педо", "pedo",
+    "sex", "секс", "xxx", "xhamster", "pornhub",
+    "hentai", "хентай", "incest", "инцест",
+    "zoophil", "зоофил", "bestiality", "бестиалити",
+    "rape", "rape", "насилие", "violence",
+    "terrorist", "террорист", "bomb", "бомба",
+    "kill", "убийство", "murder", "мочить",
+    "nazi", "нацист", "hitler", "гитлер", "swastika", "свастика",
+    "nigga", "nigger", "ниггер", "chink", "chink",
+    "fag", "faggot", "пидор", "гомик",
+    "whore", "шлюха", "bitch", "сука", "блядь",
+    "суицид", "suicide", "self-harm", "selfharm",
+    "drugs", "drug", "наркотик", "cocaine", "кокаин", "heroin", "героин",
+    "darknet", "даркнет", "траг", "трагедия", "траг",
+    "ecstasy", "экстази", "lsd", "лсд", "meth", "мет",
+    "scam", "скам", "фишинг", "phishing",
+]
+
 USER_TAG_PATTERN = re.compile(r'^[A-Z0-9_]{1,16}$')
 
 
@@ -436,6 +458,7 @@ class Settings(BaseSettings):
     MULENPAY_VAT_CODE: int = 0
 
     DISPLAY_NAME_BANNED_KEYWORDS: str = '\n'.join(DEFAULT_DISPLAY_NAME_BANNED_KEYWORDS)
+    USER_NAME_BANNED_KEYWORDS: str = '\n'.join(DEFAULT_USER_NAME_BANNED_KEYWORDS)
     MULENPAY_PAYMENT_SUBJECT: int = 4
     MULENPAY_PAYMENT_MODE: int = 4
     MULENPAY_MIN_AMOUNT_KOPEKS: int = 10000
@@ -1309,6 +1332,30 @@ class Settings(BaseSettings):
 
     def get_display_name_banned_keywords(self) -> list[str]:
         raw_value = self.DISPLAY_NAME_BANNED_KEYWORDS
+        if raw_value is None:
+            return []
+
+        if isinstance(raw_value, str):
+            candidates = re.split(r'[\n,]+', raw_value)
+        else:
+            candidates = list(raw_value)
+
+        unique: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            normalized = str(candidate).strip().lower()
+            if not normalized:
+                continue
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            unique.append(normalized)
+
+        return unique
+
+    def get_user_name_banned_keywords(self) -> list[str]:
+        """Получить список запрещенных слов для имен пользователей (first_name, last_name, username)."""
+        raw_value = self.USER_NAME_BANNED_KEYWORDS
         if raw_value is None:
             return []
 

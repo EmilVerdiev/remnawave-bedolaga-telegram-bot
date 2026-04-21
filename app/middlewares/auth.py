@@ -16,7 +16,7 @@ from app.database.database import AsyncSessionLocal
 from app.services.remnawave_service import RemnaWaveService
 from app.states import RegistrationStates
 from app.utils.check_reg_process import is_registration_process
-from app.utils.validators import sanitize_telegram_name
+from app.utils.validators import sanitize_telegram_name, check_banned_words_in_user_name
 
 
 logger = structlog.get_logger(__name__)
@@ -55,6 +55,34 @@ class AuthMiddleware(BaseMiddleware):
 
         if user.is_bot:
             return await handler(event, data)
+
+        # Проверка на запрещенные слова в имени пользователя
+        banned_keywords = settings.get_user_name_banned_keywords()
+        has_banned_word, found_word = check_banned_words_in_user_name(
+            user.first_name, user.last_name, user.username, banned_keywords
+        )
+        
+        if has_banned_word and found_word:
+            logger.warning(
+                '🚫 Пользователь заблокирован автоматически: запрещенное слово в имени',
+                telegram_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                banned_word=found_word,
+            )
+            # Отправляем сообщение о блокировке, если это сообщение (не callback)
+            if isinstance(event, Message):
+                try:
+                    await event.answer('🚫 Ваш аккаунт заблокирован автоматически.')
+                except Exception:
+                    pass
+            elif isinstance(event, CallbackQuery):
+                try:
+                    await event.answer('🚫 Аккаунт заблокирован.', show_alert=True)
+                except Exception:
+                    pass
+            return None
 
         async with AsyncSessionLocal() as db:
             try:

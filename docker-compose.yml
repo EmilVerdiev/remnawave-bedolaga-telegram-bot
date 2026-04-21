@@ -10,6 +10,8 @@ services:
     image: postgres:15-alpine
     container_name: remnawave_bot_db
     restart: unless-stopped
+    # Пул бота до 100 коннектов + запас под админку/psql/миграции (дефолт PG=100 мало)
+    command: ['postgres', '-c', 'max_connections=200']
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-remnawave_bot}
       POSTGRES_USER: ${POSTGRES_USER:-remnawave_user}
