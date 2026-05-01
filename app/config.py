@@ -22,24 +22,21 @@ DEFAULT_DISPLAY_NAME_BANNED_KEYWORDS: list[str] = [
 
 # Запрещенные слова для имен пользователей (first_name, last_name, username)
 # При обнаружении пользователь автоматически блокируется
+# Порно в нике + CSAM/детская порнография (подстрока, без учёта регистра)
 DEFAULT_USER_NAME_BANNED_KEYWORDS: list[str] = [
-    "порно", "porn", "cp", "child porn", "детское порно",
-    "педофил", "pedofil", "pedophil", "педо", "pedo",
-    "sex", "секс", "xxx", "xhamster", "pornhub",
-    "hentai", "хентай", "incest", "инцест",
-    "zoophil", "зоофил", "bestiality", "бестиалити",
-    "rape", "rape", "насилие", "violence",
-    "terrorist", "террорист", "bomb", "бомба",
-    "kill", "убийство", "murder", "мочить",
-    "nazi", "нацист", "hitler", "гитлер", "swastika", "свастика",
-    "nigga", "nigger", "ниггер", "chink", "chink",
-    "fag", "faggot", "пидор", "гомик",
-    "whore", "шлюха", "bitch", "сука", "блядь",
-    "суицид", "suicide", "self-harm", "selfharm",
-    "drugs", "drug", "наркотик", "cocaine", "кокаин", "heroin", "героин",
-    "darknet", "даркнет", "траг", "трагедия", "траг",
-    "ecstasy", "экстази", "lsd", "лсд", "meth", "мет",
-    "scam", "скам", "фишинг", "phishing",
+    "порно",
+    "porn",
+    "cp",
+    "csam",
+    "child porn",
+    "childporn",
+    "детское порно",
+    "педофил",
+    "pedofil",
+    "pedophil",
+    "pedophile",
+    "педо",
+    "pedo",
 ]
 
 USER_TAG_PATTERN = re.compile(r'^[A-Z0-9_]{1,16}$')
@@ -257,7 +254,7 @@ class Settings(BaseSettings):
     REFERRAL_MINIMUM_TOPUP_KOPEKS: int = 10000
     REFERRAL_FIRST_TOPUP_BONUS_KOPEKS: int = 10000
     REFERRAL_INVITER_BONUS_KOPEKS: int = 10000
-    REFERRAL_COMMISSION_PERCENT: int = 25
+    REFERRAL_COMMISSION_PERCENT: int = 20
     REFERRAL_MAX_COMMISSION_PAYMENTS: int = 0  # Макс. кол-во платежей реферала с комиссией (0 = без лимита)
 
     REFERRAL_PROGRAM_ENABLED: bool = True

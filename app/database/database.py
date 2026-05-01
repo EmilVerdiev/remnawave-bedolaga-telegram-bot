@@ -40,8 +40,8 @@ if IS_SQLITE:
 else:
     poolclass = AsyncAdaptedQueuePool
     pool_kwargs = {
-        'pool_size': 50,  # макс одновременных коннектов = pool_size + max_overflow (следи за max_connections в PG)
-        'max_overflow': 50,  # итого до 100 коннектов с одного процесса бота
+        'pool_size': 500,  # макс одновременных коннектов = pool_size + max_overflow
+        'max_overflow': 500,  # итого до 1000 коннектов с одного процесса бота
         'pool_timeout': 30,  # Уменьшен с 60, быстрее отдавать 503 при перегрузке
         'pool_recycle': 1800,  # 30 мин для более быстрого recycling
         'pool_pre_ping': True,

@@ -72,6 +72,178 @@ from app.utils.timezone import format_local_datetime
 # Кулдаун между повторными уведомлениями об автоплатеже с недостаточным балансом (6 часов)
 AUTOPAY_INSUFFICIENT_BALANCE_COOLDOWN_SECONDS: int = 21600
 
+# Спецтексты «Обходыч» без рекуррентной оплаты с карты — совпадает с типичными AUTOPAY_WARNING_DAYS (5/3/2/1)
+_OBHODICH_EXPIRING_NOTICE_DAYS: frozenset[int] = frozenset({5, 3, 2, 1})
+
+_OBHODICH_EXPIRING_FALLBACK_MESSAGES: dict[int, str] = {
+    5: (
+        'Через 5 дней закончится оплаченный месяц использования «Обходыча».\n\n'
+        'Т.к. у нас нет рекуррентных платежей (которые списывают средства с вашей карты автоматически), '
+        'предлагаем вам пополнить баланс вашего счета заранее 😎\n\n'
+        'Для вашего удобства, вы можете пополнить счет сразу на 3 или 6 месяцев, и подключить в '
+        'Личном кабинете автосписание средств. Таким образом продление будет происходить автоматически '
+        'с баланса вашего счета, это максимально удобно 👍'
+    ),
+    3: (
+        '<b>Просто напоминаю, что осталось 3 дня оплаченной подписки на «Обходыч»…</b>\n\n'
+        'Т.к. у нас нет рекуррентных платежей (которые списывают средства с вашей карты автоматически), '
+        'предлагаем вам пополнить баланс вашего счета заранее 😎\n\n'
+        'Для вашего удобства, вы можете пополнить счет сразу на 3 или 6 месяцев, и подключить в '
+        'Личном кабинете автосписание средств. Таким образом продление будет происходить автоматически '
+        'с баланса вашего счета, это максимально удобно 👍'
+    ),
+    2: (
+        '<b>Подписка на «Обходыч» истекает через 2 дня!</b>\n\n'
+        '<b>{end_date}</b> — подписка будет отключена, и т.к. у нас нет рекуррентных платежей '
+        '(которые списывают средства с вашей карты автоматически), предлагаем вам пополнить баланс вашего счета '
+        'заранее!\n\n'
+        'Для вашего удобства, вы можете пополнить счет сразу на 3 или 6 месяцев, и подключить в '
+        'Личном кабинете автосписание средств. Таким образом продление будет происходить автоматически '
+        'с баланса вашего счета, это максимально удобно 👍'
+    ),
+    1: (
+        '<b>Остался всего 1 день подписки на «Обходыч»!</b>\n\n'
+        'Если вдруг с пополнением баланса возникла какая-то проблема, у нас можно очень легко создать тикет в '
+        'поддержку и сообщить о проблеме. Но уже завтра <b>{end_date}</b> подписка закончится и доступ к '
+        '«Обходычу» будет отключен 🙁'
+    ),
+}
+
+
+def _subscription_expiring_obhodich_notice(texts: Any, *, days_left: int, end_date_human: str) -> str | None:
+    """Возвращает HTML-текст уведомления для брендовых сообщений Обходыч; иначе None."""
+    tmpl = texts.t(
+        f'SUBSCRIPTION_EXPIRING_OBHODICH_{days_left}D',
+        _OBHODICH_EXPIRING_FALLBACK_MESSAGES.get(days_left, ''),
+    )
+    if not tmpl or not str(tmpl).strip():
+        return None
+    return str(tmpl).format(end_date=end_date_human)
+
+
+_MIN_TOPUP_HINT_KOPEKS = 100
+
+
+def _topup_hints_from_legacy_settings() -> tuple[int | None, int | None]:
+    """Классический режим без tariff_id или пустые цены тарифа: PRICE_* из settings."""
+    p90 = int(getattr(settings, 'PRICE_90_DAYS', 0) or 0)
+    p180 = int(getattr(settings, 'PRICE_180_DAYS', 0) or 0)
+    p30 = int(getattr(settings, 'PRICE_30_DAYS', 0) or 0)
+    k3 = p90 if p90 >= _MIN_TOPUP_HINT_KOPEKS else None
+    k6 = p180 if p180 >= _MIN_TOPUP_HINT_KOPEKS else None
+    if k3 is None and p30 >= _MIN_TOPUP_HINT_KOPEKS:
+        k3 = p30 * 3
+    if k6 is None and p30 >= _MIN_TOPUP_HINT_KOPEKS:
+        k6 = p30 * 6
+    return k3, k6
+
+
+def _estimated_three_six_month_topup_kopeks(subscription: Subscription) -> tuple[int | None, int | None]:
+    """Ориентир суммы продления: 90 и 180 дней из period_prices, иначе 3×/6× цена 30 дней; для суточного — 90/180 × дневная.
+
+    Если у подписки нет тарифа (классика) или в тарифе нет подходящих ключей периода — берём PRICE_* из settings.
+    """
+
+    def _finalize(a: int | None, b: int | None) -> tuple[int | None, int | None]:
+        if a is not None and a < _MIN_TOPUP_HINT_KOPEKS:
+            a = None
+        if b is not None and b < _MIN_TOPUP_HINT_KOPEKS:
+            b = None
+        if a and b and a == b:
+            b = None
+        return a, b
+
+    tariff = getattr(subscription, 'tariff', None)
+    if tariff is None:
+        return _finalize(*_topup_hints_from_legacy_settings())
+
+    if getattr(tariff, 'is_daily', False):
+        daily = int(tariff.daily_price_kopeks or 0)
+        if daily <= 0:
+            return _finalize(*_topup_hints_from_legacy_settings())
+        return _finalize(daily * 90, daily * 180)
+
+    k3 = tariff.get_price_for_period(90)
+    k6 = tariff.get_price_for_period(180)
+    p30 = tariff.get_price_for_period(30)
+    # Не использовать `and p30` — 0 может быть недопустим, но нужно явно проверять is not None
+    if k3 is None and p30 is not None:
+        try:
+            p30_int = int(p30)
+            if p30_int >= _MIN_TOPUP_HINT_KOPEKS:
+                k3 = p30_int * 3
+        except (TypeError, ValueError):
+            pass
+    if k6 is None and p30 is not None:
+        try:
+            p30_int = int(p30)
+            if p30_int >= _MIN_TOPUP_HINT_KOPEKS:
+                k6 = p30_int * 6
+        except (TypeError, ValueError):
+            pass
+
+    if (k3 is None or k6 is None) and tariff.get_available_periods():
+        shortest = tariff.get_available_periods()[0]
+        base = tariff.get_price_for_period(shortest)
+        try:
+            if isinstance(shortest, int) and shortest > 0 and base is not None:
+                bp = int(base)
+                if bp >= _MIN_TOPUP_HINT_KOPEKS:
+                    if k3 is None:
+                        k3 = int(bp * 90 / shortest)
+                    if k6 is None:
+                        k6 = int(bp * 180 / shortest)
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+
+    k3, k6 = _finalize(k3, k6)
+
+    # Тариф без цен / после экстраполяции всё ещё пусто
+    if k3 is None and k6 is None:
+        return _finalize(*_topup_hints_from_legacy_settings())
+
+    return k3, k6
+
+
+def _expiring_notice_tariff_topup_appendix(
+    texts: Any,
+    subscription: Subscription,
+    *,
+    k3: int | None,
+    k6: int | None,
+) -> str:
+    if not k3 and not k6:
+        return ''
+    bits: list[str] = []
+    if k3:
+        bits.append(texts.format_price(k3))
+    if k6:
+        bits.append(texts.format_price(k6))
+    tariff = getattr(subscription, 'tariff', None)
+    name_raw = getattr(tariff, 'name', None) if tariff else None
+    safe_name = html.escape(str(name_raw).strip()) if name_raw else ''
+    if len(bits) == 2:
+        if safe_name:
+            return texts.t(
+                'SUBSCRIPTION_EXPIRING_TOPUP_HINT_TWO',
+                '\n💡 По тарифу <b>{tariff}</b>: ориентир пополнить ≈на <b>{p3}</b> (~3 мес.) или ≈на <b>{p6}</b> (~6 мес.).\n',
+            ).format(tariff=safe_name, p3=bits[0], p6=bits[1])
+        return texts.t(
+            'SUBSCRIPTION_EXPIRING_TOPUP_HINT_TWO_NONAME',
+            '\n💡 Ориентир: пополнить ≈на <b>{p3}</b> (~3 мес.) или ≈на <b>{p6}</b> (~6 мес.).\n',
+        ).format(p3=bits[0], p6=bits[1])
+    only = bits[0]
+    if safe_name:
+        return texts.t(
+            'SUBSCRIPTION_EXPIRING_TOPUP_HINT_ONE',
+            '\n💡 По тарифу <b>{tariff}</b>: ориентир пополнить ≈на <b>{price}</b>.\n',
+        ).format(tariff=safe_name, price=only)
+    return texts.t(
+        'SUBSCRIPTION_EXPIRING_TOPUP_HINT_ONE_NONAME',
+        '\n💡 Ориентир пополнить ≈на <b>{price}</b>.\n',
+    ).format(price=only)
+
+
 # Размер батча для проверки подписок на каналы (keyset pagination)
 _CHANNEL_CHECK_BATCH_SIZE: int = 100
 
@@ -1397,60 +1569,94 @@ class MonitoringService:
             from app.utils.formatters import format_days_declension
 
             texts = get_texts(user.language)
-            days_text = format_days_declension(days, user.language)
+            end_date = format_local_datetime(subscription.end_date, '%d.%m.%Y %H:%M')
 
-            if subscription.autopay_enabled and has_saved_card:
-                autopay_status = texts.t(
-                    'AUTOPAY_STATUS_CARD_ACTIVE',
-                    '✅ Включен — будет автоматическое списание с карты',
+            if days in _OBHODICH_EXPIRING_NOTICE_DAYS and not getattr(subscription, 'is_trial', False):
+                obhodich_notice = _subscription_expiring_obhodich_notice(
+                    texts, days_left=days, end_date_human=end_date
                 )
-                action_text = texts.t(
-                    'AUTOPAY_ACTION_CHECK_BALANCE',
-                    '💰 Убедитесь, что на балансе достаточно средств: {balance}',
-                ).format(balance=texts.format_price(user.balance_kopeks))
-            elif subscription.autopay_enabled:
-                autopay_status = texts.t(
-                    'AUTOPAY_STATUS_NO_CARD',
-                    '✅ Включен — подписка продлится автоматически',
-                )
-                action_text = texts.t(
-                    'AUTOPAY_ACTION_CHECK_BALANCE',
-                    '💰 Убедитесь, что на балансе достаточно средств: {balance}',
-                ).format(balance=texts.format_price(user.balance_kopeks))
             else:
-                autopay_status = texts.t(
-                    'AUTOPAY_STATUS_OFF',
-                    '❌ Отключен — не забудьте продлить вручную!',
-                )
-                if settings.ENABLE_AUTOPAY:
+                obhodich_notice = None
+
+            if obhodich_notice is None:
+                days_text = format_days_declension(days, user.language)
+
+                if subscription.autopay_enabled and has_saved_card:
+                    autopay_status = texts.t(
+                        'AUTOPAY_STATUS_CARD_ACTIVE',
+                        '✅ Включен — будет автоматическое списание с карты',
+                    )
                     action_text = texts.t(
-                        'AUTOPAY_ACTION_ENABLE',
-                        '💡 Включите автоплатеж или продлите подписку вручную',
+                        'AUTOPAY_ACTION_CHECK_BALANCE',
+                        '💰 Убедитесь, что на балансе достаточно средств: {balance}',
+                    ).format(balance=texts.format_price(user.balance_kopeks))
+                elif subscription.autopay_enabled:
+                    autopay_status = texts.t(
+                        'AUTOPAY_STATUS_NO_CARD',
+                        '✅ Включен — подписка продлится автоматически',
+                    )
+                    action_text = texts.t(
+                        'AUTOPAY_ACTION_CHECK_BALANCE',
+                        '💰 Убедитесь, что на балансе достаточно средств: {balance}',
+                    ).format(balance=texts.format_price(user.balance_kopeks))
+                else:
+                    autopay_status = texts.t(
+                        'AUTOPAY_STATUS_OFF',
+                        '❌ Отключен — не забудьте продлить вручную!',
+                    )
+                    if settings.ENABLE_AUTOPAY:
+                        action_text = texts.t(
+                            'AUTOPAY_ACTION_ENABLE',
+                            '💡 Включите автоплатеж или продлите подписку вручную',
+                        )
+                    else:
+                        action_text = texts.t(
+                            'AUTOPAY_ACTION_RENEW',
+                            '💡 Продлите подписку вручную',
+                        )
+
+                tariff_label = ''
+                if settings.is_multi_tariff_enabled() and hasattr(subscription, 'tariff') and subscription.tariff:
+                    tariff_label = f' «{subscription.tariff.name}»'
+                if getattr(subscription, 'is_trial', False):
+                    paid_tpl_key = 'SUBSCRIPTION_EXPIRING_PAID_TRIAL'
+                    paid_tpl_default = (
+                        '\n⚠️ <b>Подписка{tariff_label} истекает через {days_text}!</b>\n\n'
+                        'Ваша пробная подписка истекает {end_date}.\n\n'
+                        '💳 <b>Автоплатеж:</b> {autopay_status}\n\n'
+                        '{action_text}\n'
                     )
                 else:
-                    action_text = texts.t(
-                        'AUTOPAY_ACTION_RENEW',
-                        '💡 Продлите подписку вручную',
+                    paid_tpl_key = 'SUBSCRIPTION_EXPIRING_PAID'
+                    paid_tpl_default = (
+                        '\n⚠️ <b>Подписка{tariff_label} истекает через {days_text}!</b>\n\n'
+                        'Ваша платная подписка истекает {end_date}.\n\n'
+                        '💳 <b>Автоплатеж:</b> {autopay_status}\n\n'
+                        '{action_text}\n'
                     )
+                message = texts.t(paid_tpl_key, paid_tpl_default).format(
+                    days_text=days_text,
+                    end_date=end_date,
+                    autopay_status=autopay_status,
+                    action_text=action_text,
+                    tariff_label=tariff_label,
+                )
+            else:
+                message = obhodich_notice
 
-            end_date = format_local_datetime(subscription.end_date, '%d.%m.%Y %H:%M')
-            # Add tariff name for multi-subscription clarity
-            tariff_label = ''
-            if settings.is_multi_tariff_enabled() and hasattr(subscription, 'tariff') and subscription.tariff:
-                tariff_label = f' «{subscription.tariff.name}»'
-            message = texts.t(
-                'SUBSCRIPTION_EXPIRING_PAID',
-                '\n⚠️ <b>Подписка{tariff_label} истекает через {days_text}!</b>\n\n'
-                'Ваша платная подписка истекает {end_date}.\n\n'
-                '💳 <b>Автоплатеж:</b> {autopay_status}\n\n'
-                '{action_text}\n',
-            ).format(
-                days_text=days_text,
-                end_date=end_date,
-                autopay_status=autopay_status,
-                action_text=action_text,
-                tariff_label=tariff_label,
-            )
+            paid_long_topup_hint = obhodich_notice is not None and not bool(getattr(subscription, 'is_trial', False))
+            k3_prefill: int | None = None
+            k6_prefill: int | None = None
+            if paid_long_topup_hint:
+                k3_prefill, k6_prefill = _estimated_three_six_month_topup_kopeks(subscription)
+                if k3_prefill and k6_prefill and k3_prefill == k6_prefill:
+                    k6_prefill = None
+                message += _expiring_notice_tariff_topup_appendix(
+                    texts,
+                    subscription,
+                    k3=k3_prefill,
+                    k6=k6_prefill,
+                )
 
             from aiogram.types import InlineKeyboardMarkup
 
@@ -1459,15 +1665,18 @@ class MonitoringService:
                 'BTN_MY_SUBSCRIPTIONS' if settings.is_multi_tariff_enabled() else 'BTN_MY_SUBSCRIPTION',
                 '📱 Мои подписки' if settings.is_multi_tariff_enabled() else '📱 Моя подписка',
             )
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        build_miniapp_or_callback_button(
-                            text=texts.t('BTN_RENEW_SUBSCRIPTION', '⏰ Продлить подписку'),
-                            callback_data=extend_callback,
-                            cabinet_path='/subscription',
-                        )
-                    ],
+            kb_rows: list[list] = [
+                [
+                    build_miniapp_or_callback_button(
+                        text=texts.t('BTN_RENEW_SUBSCRIPTION', '⏰ Продлить подписку'),
+                        callback_data=extend_callback,
+                        cabinet_path='/subscription',
+                    )
+                ],
+            ]
+
+            kb_rows.extend(
+                (
                     [
                         build_miniapp_or_callback_button(
                             text=texts.t('BTN_TOPUP_BALANCE', '💳 Пополнить баланс'),
@@ -1475,14 +1684,17 @@ class MonitoringService:
                         )
                     ],
                     [build_miniapp_or_callback_button(text=sub_btn_text, callback_data='menu_subscription')],
-                ]
+                )
             )
+
+            keyboard = InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
             await self._send_message_with_logo(
                 chat_id=user.telegram_id,
                 text=message,
                 parse_mode='HTML',
                 reply_markup=keyboard,
+                user=user,
             )
             return True
 
