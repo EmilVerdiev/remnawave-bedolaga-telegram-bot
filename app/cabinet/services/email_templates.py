@@ -1405,6 +1405,51 @@ class EmailNotificationTemplates:
     # Guest Purchase Templates
     # ============================================================================
 
+    @staticmethod
+    def _guest_vpn_import_link_blocks(subscription_url_raw: str | None) -> dict[str, str]:
+        """HTML snippets with subscription/import URL per locale; empty if no URL."""
+        raw = (subscription_url_raw or '').strip()
+        if not raw:
+            return {'ru': '', 'en': '', 'zh': '', 'ua': '', 'fa': ''}
+        esc = html.escape(raw, quote=True)
+        return {
+            'ru': f"""
+                <div class="highlight">
+                    <p><strong>Ссылка для импорта в VPN-приложение:</strong></p>
+                    <p style="word-break: break-all;"><code>{esc}</code></p>
+                    <p style="text-align: center;"><a href="{esc}" class="button">Открыть ссылку подключения</a></p>
+                </div>
+            """,
+            'en': f"""
+                <div class="highlight">
+                    <p><strong>Subscription link for your VPN app:</strong></p>
+                    <p style="word-break: break-all;"><code>{esc}</code></p>
+                    <p style="text-align: center;"><a href="{esc}" class="button">Open subscription link</a></p>
+                </div>
+            """,
+            'zh': f"""
+                <div class="highlight">
+                    <p><strong>导入 VPN 应用的订阅链接：</strong></p>
+                    <p style="word-break: break-all;"><code>{esc}</code></p>
+                    <p style="text-align: center;"><a href="{esc}" class="button">打开订阅链接</a></p>
+                </div>
+            """,
+            'ua': f"""
+                <div class="highlight">
+                    <p><strong>Посилання для імпорту у VPN-додаток:</strong></p>
+                    <p style="word-break: break-all;"><code>{esc}</code></p>
+                    <p style="text-align: center;"><a href="{esc}" class="button">Відкрити посилання</a></p>
+                </div>
+            """,
+            'fa': f"""
+                <div class="highlight" dir="rtl">
+                    <p><strong>پیوند اشتراک برای اپلیکیشن VPN:</strong></p>
+                    <p style="word-break: break-all;" dir="ltr"><code>{esc}</code></p>
+                    <p style="text-align: center;"><a href="{esc}" class="button">باز کردن پیوند</a></p>
+                </div>
+            """,
+        }
+
     def _guest_subscription_delivered_template(self, language: str, context: dict[str, Any]) -> dict[str, str]:
         """Template for guest subscription delivered notification."""
         tariff_name = html.escape(context.get('tariff_name', ''))
@@ -1481,6 +1526,8 @@ class EmailNotificationTemplates:
             else ''
         )
 
+        imp_link = self._guest_vpn_import_link_blocks(context.get('subscription_url'))
+
         bodies = {
             'ru': f"""
                 <h2>Ваша VPN подписка готова!</h2>
@@ -1489,6 +1536,7 @@ class EmailNotificationTemplates:
                     <p>Период: <strong>{period_days} дней</strong></p>
                 </div>
                 {creds_block_ru}
+                {imp_link['ru']}
                 <p>Подписка активирована в вашем личном кабинете.</p>
                 <p style="text-align: center;"><a href="{cabinet_url}" class="button">Перейти в личный кабинет</a></p>
             """,
@@ -1499,6 +1547,7 @@ class EmailNotificationTemplates:
                     <p>Period: <strong>{period_days} days</strong></p>
                 </div>
                 {creds_block_en}
+                {imp_link['en']}
                 <p>Your subscription has been activated in your cabinet.</p>
                 <p style="text-align: center;"><a href="{cabinet_url}" class="button">Go to Cabinet</a></p>
             """,
@@ -1509,6 +1558,7 @@ class EmailNotificationTemplates:
                     <p>期限: <strong>{period_days} 天</strong></p>
                 </div>
                 {creds_block_zh}
+                {imp_link['zh']}
                 <p>订阅已在您的个人中心激活。</p>
                 <p style="text-align: center;"><a href="{cabinet_url}" class="button">前往个人中心</a></p>
             """,
@@ -1519,6 +1569,7 @@ class EmailNotificationTemplates:
                     <p>Період: <strong>{period_days} днів</strong></p>
                 </div>
                 {creds_block_ua}
+                {imp_link['ua']}
                 <p>Підписка активована у вашому особистому кабінеті.</p>
                 <p style="text-align: center;"><a href="{cabinet_url}" class="button">Перейти до кабінету</a></p>
             """,
@@ -1529,6 +1580,7 @@ class EmailNotificationTemplates:
                     <p>مدت: <strong>{period_days} روز</strong></p>
                 </div>
                 {creds_block_fa}
+                {imp_link['fa']}
                 <p>اشتراک شما در پنل کاربری فعال شده است.</p>
                 <p style="text-align: center;"><a href="{cabinet_url}" class="button">رفتن به پنل کاربری</a></p>
             """,
@@ -1695,6 +1747,8 @@ class EmailNotificationTemplates:
             gift_block_ua = f'<div class="highlight"><p><em>Повідомлення: {escaped_msg}</em></p></div>'
             gift_block_fa = f'<div class="highlight"><p><em>پیام: {escaped_msg}</em></p></div>'
 
+        imp_link = self._guest_vpn_import_link_blocks(context.get('subscription_url'))
+
         subjects = {
             'ru': 'Вам подарили VPN подписку!',
             'en': "You've been gifted a VPN subscription!",
@@ -1711,6 +1765,7 @@ class EmailNotificationTemplates:
                     <p>Тариф: <strong>{tariff_name}</strong></p>
                     <p>Период: <strong>{period_days} дней</strong></p>
                 </div>
+                {imp_link['ru']}
                 <p>Подписка активирована в личном кабинете.</p>
                 {cred_block['ru']}
                 <p style="text-align: center;"><a href="{cabinet_url}" class="button">Перейти в личный кабинет</a></p>
@@ -1722,6 +1777,7 @@ class EmailNotificationTemplates:
                     <p>Plan: <strong>{tariff_name}</strong></p>
                     <p>Period: <strong>{period_days} days</strong></p>
                 </div>
+                {imp_link['en']}
                 <p>Your subscription has been activated in the cabinet.</p>
                 {cred_block['en']}
                 <p style="text-align: center;"><a href="{cabinet_url}" class="button">Go to Cabinet</a></p>
@@ -1733,6 +1789,7 @@ class EmailNotificationTemplates:
                     <p>套餐: <strong>{tariff_name}</strong></p>
                     <p>期限: <strong>{period_days} 天</strong></p>
                 </div>
+                {imp_link['zh']}
                 <p>订阅已在个人中心激活。</p>
                 {cred_block['zh']}
                 <p style="text-align: center;"><a href="{cabinet_url}" class="button">前往个人中心</a></p>
@@ -1744,6 +1801,7 @@ class EmailNotificationTemplates:
                     <p>Тариф: <strong>{tariff_name}</strong></p>
                     <p>Період: <strong>{period_days} днів</strong></p>
                 </div>
+                {imp_link['ua']}
                 <p>Підписка активована в особистому кабінеті.</p>
                 {cred_block['ua']}
                 <p style="text-align: center;"><a href="{cabinet_url}" class="button">Перейти до кабінету</a></p>
@@ -1755,6 +1813,7 @@ class EmailNotificationTemplates:
                     <p>طرح: <strong>{tariff_name}</strong></p>
                     <p>مدت: <strong>{period_days} روز</strong></p>
                 </div>
+                {imp_link['fa']}
                 <p>اشتراک در پنل کاربری فعال شده است.</p>
                 {cred_block['fa']}
                 <p style="text-align: center;"><a href="{cabinet_url}" class="button">رفتن به پنل کاربری</a></p>

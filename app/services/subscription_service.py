@@ -133,6 +133,24 @@ class SubscriptionService:
 
         return settings.get_paid_subscription_user_tag()
 
+    @staticmethod
+    def _resolve_external_squad_uuid(subscription: Subscription) -> str | None:
+        # Prefer explicit tariff mapping, fallback to global default.
+        tariff_uuid = (
+            (getattr(subscription, 'tariff', None) and getattr(subscription.tariff, 'external_squad_uuid', None)) or None
+        )
+        if tariff_uuid:
+            return tariff_uuid
+
+        default_uuid = (getattr(settings, 'DEFAULT_EXTERNAL_SQUAD_UUID', None) or '').strip() or None
+        if default_uuid:
+            logger.debug(
+                'Using default external squad fallback',
+                subscription_id=getattr(subscription, 'id', None),
+                default_external_squad_uuid=default_uuid,
+            )
+        return default_uuid
+
     @property
     def is_configured(self) -> bool:
         return self._config_error is None
@@ -180,8 +198,8 @@ class SubscriptionService:
 
             user_tag = self._resolve_user_tag(subscription)
 
-            # Определяем внешний сквад из тарифа
-            ext_squad_uuid = subscription.tariff.external_squad_uuid if subscription.tariff else None
+            # Определяем внешний сквад: из тарифа, иначе fallback из настроек
+            ext_squad_uuid = self._resolve_external_squad_uuid(subscription)
 
             async with self.get_api_client() as api:
                 hwid_limit = resolve_hwid_device_limit_for_payload(subscription)
@@ -455,8 +473,8 @@ class SubscriptionService:
 
             user_tag = self._resolve_user_tag(subscription)
 
-            # Определяем внешний сквад из тарифа
-            ext_squad_uuid = subscription.tariff.external_squad_uuid if subscription.tariff else None
+            # Определяем внешний сквад: из тарифа, иначе fallback из настроек
+            ext_squad_uuid = self._resolve_external_squad_uuid(subscription)
 
             async with self.get_api_client() as api:
                 hwid_limit = resolve_hwid_device_limit_for_payload(subscription)

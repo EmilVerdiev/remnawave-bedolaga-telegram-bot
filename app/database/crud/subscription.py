@@ -570,7 +570,13 @@ async def extend_subscription(
         subscription.status = SubscriptionStatus.ACTIVE.value
         logger.info('🔄 Статус подписки изменён с trial на ACTIVE', subscription_id=subscription.id)
     elif days > 0 and subscription.status == SubscriptionStatus.PENDING.value:
-        logger.warning('⚠️ Попытка продлить PENDING подписку , дни', subscription_id=subscription.id, days=days)
+        subscription.status = SubscriptionStatus.ACTIVE.value
+        logger.info(
+            '🔄 Статус подписки изменён с pending на ACTIVE после оплаты/продления',
+            subscription_id=subscription.id,
+            days=days,
+            is_trial=subscription.is_trial,
+        )
 
     # Обновляем параметры тарифа, если переданы
     if tariff_id is not None:
@@ -1433,7 +1439,19 @@ async def check_and_update_subscription_status(db: AsyncSession, subscription: S
 
         logger.info("⏰ Статус подписки пользователя изменен на 'expired'", user_id=subscription.user_id)
     elif subscription.status == SubscriptionStatus.PENDING.value:
-        logger.info('ℹ️ Проверка PENDING подписки статус остается без изменений', subscription_id=subscription.id)
+        if subscription.end_date and subscription.end_date > current_time:
+            subscription.status = SubscriptionStatus.ACTIVE.value
+            subscription.updated_at = current_time
+            await db.commit()
+            await db.refresh(subscription)
+            logger.warning(
+                '⚠️ PENDING подписка с будущим end_date автоматически переведена в ACTIVE',
+                subscription_id=subscription.id,
+                user_id=subscription.user_id,
+                end_date=subscription.end_date,
+            )
+        else:
+            logger.info('ℹ️ Проверка PENDING подписки статус остается без изменений', subscription_id=subscription.id)
 
     return subscription
 

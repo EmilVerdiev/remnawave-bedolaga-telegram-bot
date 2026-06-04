@@ -13,7 +13,7 @@ from app.services.blacklist_service import blacklist_service
 from app.services.maintenance_service import maintenance_service
 
 from .auth.jwt_handler import get_token_payload
-from .auth.telegram_auth import validate_telegram_init_data
+from .auth.telegram_auth import TELEGRAM_AUTH_MAX_AGE_SECONDS, validate_telegram_init_data
 from .ip_utils import get_client_ip
 
 
@@ -104,7 +104,7 @@ async def get_current_cabinet_user(
     init_data_raw = request.headers.get('X-Telegram-Init-Data')
     if init_data_raw and user.telegram_id is not None:
         # Use generous max_age: Telegram Desktop caches initData
-        tg_user = validate_telegram_init_data(init_data_raw, max_age_seconds=86400 * 30)
+        tg_user = validate_telegram_init_data(init_data_raw, max_age_seconds=TELEGRAM_AUTH_MAX_AGE_SECONDS)
         if tg_user is None:
             logger.warning(
                 'Telegram initData validation failed but header was present',
@@ -211,7 +211,7 @@ async def get_optional_cabinet_user(
     # Cross-validate Telegram identity (same as get_current_cabinet_user)
     init_data_raw = request.headers.get('X-Telegram-Init-Data')
     if init_data_raw and user.telegram_id is not None:
-        tg_user = validate_telegram_init_data(init_data_raw, max_age_seconds=86400 * 30)
+        tg_user = validate_telegram_init_data(init_data_raw, max_age_seconds=TELEGRAM_AUTH_MAX_AGE_SECONDS)
         if tg_user and tg_user.get('id') != user.telegram_id:
             logger.warning(
                 'Telegram identity mismatch in optional auth',

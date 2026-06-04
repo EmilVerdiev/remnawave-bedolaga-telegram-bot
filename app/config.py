@@ -132,6 +132,7 @@ class Settings(BaseSettings):
     REMNAWAVE_AUTO_SYNC_ENABLED: bool = False
     REMNAWAVE_AUTO_SYNC_TIMES: str = '03:00'
     CABINET_REMNA_SUB_CONFIG: str | None = None  # UUID конфига страницы подписки из RemnaWave
+    DEFAULT_EXTERNAL_SQUAD_UUID: str | None = None  # Fallback external squad for users without tariff-specific one
 
     # RemnaWave incoming webhooks (real-time event delivery from backend)
     REMNAWAVE_WEBHOOK_ENABLED: bool = False

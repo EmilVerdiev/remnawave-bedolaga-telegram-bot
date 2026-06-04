@@ -11,7 +11,17 @@ services:
     container_name: remnawave_bot_db
     restart: unless-stopped
     # Пул бота до 1000 коннектов + запас под админку/psql/миграции
-    command: ['postgres', '-c', 'max_connections=1200', '-c', 'shared_buffers=2GB']
+    # idle_in_transaction_session_timeout в миллисекундах (60000 = 60 с) — рвёт «залипшие» транзакции
+    command:
+      [
+        'postgres',
+        '-c',
+        'max_connections=1200',
+        '-c',
+        'shared_buffers=2GB',
+        '-c',
+        'idle_in_transaction_session_timeout=60000',
+      ]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-remnawave_bot}
       POSTGRES_USER: ${POSTGRES_USER:-remnawave_user}

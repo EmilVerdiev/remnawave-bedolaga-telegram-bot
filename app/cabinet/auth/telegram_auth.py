@@ -21,6 +21,10 @@ logger = structlog.get_logger(__name__)
 # Maximum allowed clock skew (seconds) for auth_date — tolerates minor drift between Telegram servers and ours.
 _MAX_CLOCK_SKEW_SECONDS = 300
 
+# Telegram Desktop/iOS cache initData with stale auth_date (known bug).
+# HMAC signature still proves authenticity; session expiry is handled by JWT after login.
+TELEGRAM_AUTH_MAX_AGE_SECONDS = 86400 * 90
+
 
 def validate_telegram_login_widget(data: dict[str, Any], max_age_seconds: int = 86400) -> bool:
     """

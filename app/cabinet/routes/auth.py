@@ -465,7 +465,9 @@ async def auth_telegram(
     # https://github.com/telegramdesktop/tdesktop/issues/28303).
     # Use generous max_age: HMAC signature proves authenticity,
     # JWT tokens handle actual session expiration after login.
-    user_data = validate_telegram_init_data(request.init_data, max_age_seconds=86400 * 30)
+    from app.cabinet.auth.telegram_auth import TELEGRAM_AUTH_MAX_AGE_SECONDS
+
+    user_data = validate_telegram_init_data(request.init_data, max_age_seconds=TELEGRAM_AUTH_MAX_AGE_SECONDS)
 
     if not user_data:
         raise HTTPException(
@@ -610,7 +612,9 @@ async def auth_telegram_widget(
     widget_data = request.model_dump(exclude={'campaign_slug', 'referral_code'})
 
     # Generous max_age: Telegram caches auth data with stale auth_date
-    if not validate_telegram_login_widget(widget_data, max_age_seconds=86400 * 30):
+    from app.cabinet.auth.telegram_auth import TELEGRAM_AUTH_MAX_AGE_SECONDS
+
+    if not validate_telegram_login_widget(widget_data, max_age_seconds=TELEGRAM_AUTH_MAX_AGE_SECONDS):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail='Invalid or expired Telegram authentication data',
